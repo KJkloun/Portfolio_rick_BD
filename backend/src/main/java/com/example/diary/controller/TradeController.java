@@ -1,9 +1,16 @@
 package com.example.diary.controller;
 
+import com.example.diary.model.Portfolio;
 import com.example.diary.model.Trade;
-import com.example.diary.repository.TradeRepository;
 import com.example.diary.model.TradeClosure;
+import com.example.diary.model.FinancingEvent;
+import com.example.diary.model.User;
+import com.example.diary.model.FinancingEvent.EventType;
+import com.example.diary.service.TradeService;
+import com.example.diary.repository.FinancingEventRepository;
 import com.example.diary.repository.TradeClosureRepository;
+import com.example.diary.repository.TradeRepository;
+import com.example.diary.service.UserService;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
@@ -14,11 +21,17 @@ import java.net.URI;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
-import java.util.stream.Collectors;
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import java.time.temporal.ChronoUnit;
+import java.util.stream.Collectors;
+
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
+import com.example.diary.service.PriceService;
+import com.example.diary.service.PriceService.Quote;
 
 @RestController
 @RequestMapping("/trades")
@@ -34,13 +47,29 @@ public class TradeController {
     private TradeClosureRepository tradeClosureRepository;
 
     @Autowired
+    private TradeService tradeService;
+
+    @Autowired
+    private FinancingEventRepository financingEventRepository;
+
+    @Autowired
     private com.example.diary.repository.PortfolioRepository portfolioRepository;
 
+    @Autowired
+    private UserService userService;
+
+    @Autowired
+    private PriceService priceService;
     @GetMapping
     public ResponseEntity<List<Trade>> getAllTrades(@RequestHeader(value = "X-Portfolio-ID", required = false) Long portfolioId) {
-        List<Trade> trades = (portfolioId != null)
-                ? tradeRepository.findByPortfolioId(portfolioId)
-                : tradeRepository.findAll();
+        User user = getAuthenticatedUser();
+        List<Trade> trades;
+        if (portfolioId != null) {
+            Portfolio portfolio = getPortfolioForUser(portfolioId, user);
+            trades = tradeRepository.findByPortfolioIdAndPortfolioUser(portfolio.getId(), user);
+        } else {
+            trades = tradeRepository.findByPortfolioUser(user);
+        }
         return ResponseEntity.ok(trades);
     }
 
@@ -49,7 +78,15 @@ public class TradeController {
                                       @RequestHeader(value = "X-Portfolio-ID", required = false) Long portfolioId) {
         try {
             logger.info("Получен запрос на покупку: {}", trade);
-            
+
+            if (portfolioId == null) {
+                return ResponseEntity.badRequest().body(Map.of("message", "Не указан портфель для сделки"));
+            }
+
+            User user = getAuthenticatedUser();
+            Portfolio portfolio = getPortfolioForUser(portfolioId, user);
+            trade.setPortfolio(portfolio);
+
             // Используем дату из запроса, если она не указана - используем текущую
             if (trade.getEntryDate() == null) {
                 trade.setEntryDate(LocalDate.now());
@@ -71,32 +108,10 @@ public class TradeController {
             if (trade.getMarginAmount() == null) {
                 return ResponseEntity.badRequest().body(Map.of("message", "Процент за кредит не может быть пустым"));
             }
-            
-            // Преобразуем числовые значения в BigDecimal, если они пришли как Double
-            if (!(trade.getEntryPrice() instanceof BigDecimal)) {
-                trade.setEntryPrice(BigDecimal.valueOf(trade.getEntryPrice().doubleValue()));
-    }
 
-            if (!(trade.getMarginAmount() instanceof BigDecimal)) {
-                trade.setMarginAmount(BigDecimal.valueOf(trade.getMarginAmount().doubleValue()));
-            }
-            
-            // Привязываем к портфелю
-            if (portfolioId != null) {
-                trade.setPortfolio(portfolioRepository.findById(portfolioId).orElse(null));
-            }
-            
-            // Рассчитываем проценты по кредиту
-            Double totalCost = trade.getTotalCost();
-            Double dailyInterestAmount = trade.getDailyInterestAmount();
-            
-            logger.info("Расчет: totalCost={}, dailyInterest={}", 
-                        totalCost, dailyInterestAmount);
-            
-            // Сохраняем сделку
-            Trade savedTrade = tradeRepository.save(trade);
+            Trade savedTrade = tradeService.openTrade(trade, portfolio);
             logger.info("Сделка сохранена с ID: {}", savedTrade.getId());
-            
+
             URI location = ServletUriComponentsBuilder
                 .fromCurrentRequest()
                 .path("/{id}")
@@ -105,8 +120,8 @@ public class TradeController {
 
             Map<String, Object> response = new HashMap<>();
             response.put("trade", savedTrade);
-            response.put("totalCost", totalCost);
-            response.put("dailyInterest", dailyInterestAmount);
+            response.put("totalCost", savedTrade.getTotalCost());
+            response.put("dailyInterest", savedTrade.getDailyInterestAmount());
 
             return ResponseEntity.created(location).body(response);
         } catch (Exception e) {
@@ -123,6 +138,13 @@ public class TradeController {
         try {
             logger.info("Получен запрос на массовый импорт сделок");
 
+            if (portfolioId == null) {
+                return ResponseEntity.badRequest().body(Map.of("message", "Не указан портфель для импорта сделок"));
+            }
+
+            User user = getAuthenticatedUser();
+            Portfolio portfolio = getPortfolioForUser(portfolioId, user);
+
             List<Map<String, Object>> tradesToImport = request.get("trades");
             if (tradesToImport == null || tradesToImport.isEmpty()) {
                 return ResponseEntity.badRequest().body(Map.of("message", "Список сделок пуст"));
@@ -137,6 +159,7 @@ public class TradeController {
                 try {
                     Map<String, Object> tradeData = tradesToImport.get(i);
                     Trade trade = new Trade();
+                    trade.setPortfolio(portfolio);
 
                     // Обязательные поля
                     String symbol = (String) tradeData.get("symbol");
@@ -229,12 +252,6 @@ public class TradeController {
                             }
                         }
                     }
-
-                    // Привязываем к портфелю
-                    if (portfolioId != null) {
-                        trade.setPortfolio(portfolioRepository.findById(portfolioId).orElse(null));
-                    }
-
                     // Сохраняем сделку
                     Trade savedTrade = tradeRepository.save(trade);
                     savedTrades.add(savedTrade);
@@ -270,43 +287,22 @@ public class TradeController {
         }
     }
 
+    // Ручное закрытие отключено: используйте FIFO
     @PostMapping("/{id}/sell")
     public ResponseEntity<?> sellTrade(
             @PathVariable Long id,
             @RequestParam Double exitPrice,
             @RequestHeader(value = "X-Portfolio-ID", required = false) Long portfolioId) {
-        try {
-            Trade trade = tradeRepository.findById(id)
-                .orElseThrow(() -> new RuntimeException("Сделка не найдена"));
-
-            if (portfolioId != null && !trade.getPortfolio().getId().equals(portfolioId)) {
-                return ResponseEntity.status(403).body(Map.of("message", "Trade does not belong to portfolio"));
-            }
-
-            trade.setExitPrice(BigDecimal.valueOf(exitPrice));
-            trade.setExitDate(LocalDate.now());
-            
-            Trade updatedTrade = tradeRepository.save(trade);
-
-            Map<String, Object> response = new HashMap<>();
-            response.put("trade", updatedTrade);
-            response.put("totalInterest", updatedTrade.getTotalInterest());
-            response.put("profit", updatedTrade.getProfit());
-            response.put("dailyInterests", updatedTrade.getDailyInterestList());
-
-            return ResponseEntity.ok(response);
-        } catch (Exception e) {
-            logger.error("Ошибка при продаже сделки", e);
-            Map<String, String> error = new HashMap<>();
-            error.put("message", "Ошибка продажи сделки: " + e.getMessage());
-            return ResponseEntity.badRequest().body(error);
-        }
+        return ResponseEntity.badRequest().body(Map.of(
+            "message", "Используйте FIFO закрытие /trades/fifo-close. Ручное закрытие сделки отключено."
+        ));
     }
 
     @GetMapping("/{id}/daily-interest")
     public ResponseEntity<?> getDailyInterest(@PathVariable Long id) {
         try {
-            Trade trade = tradeRepository.findById(id)
+            User user = getAuthenticatedUser();
+            Trade trade = tradeRepository.findByIdAndPortfolioUser(id, user)
                 .orElseThrow(() -> new RuntimeException("Сделка не найдена"));
 
             Map<String, Object> response = new HashMap<>();
@@ -323,30 +319,111 @@ public class TradeController {
         }
     }
 
+    @GetMapping("/{id}/financing-events")
+    public ResponseEntity<?> getFinancingEvents(@PathVariable Long id) {
+        try {
+            User user = getAuthenticatedUser();
+            List<FinancingEvent> events = financingEventRepository.findByTradeIdAndUser(id, user);
+            return ResponseEntity.ok(events);
+        } catch (Exception e) {
+            logger.error("Ошибка при получении событий финансирования", e);
+            return ResponseEntity.badRequest().body(Map.of("message", "Ошибка получения событий: " + e.getMessage()));
+        }
+    }
+
+    @PostMapping("/{id}/financing-events")
+    public ResponseEntity<?> addFinancingEvent(
+            @PathVariable Long id,
+            @RequestBody Map<String, Object> payload) {
+        try {
+            User user = getAuthenticatedUser();
+            Trade trade = tradeRepository.findByIdAndPortfolioUser(id, user)
+                .orElseThrow(() -> new RuntimeException("Сделка не найдена"));
+
+            FinancingEvent event = new FinancingEvent();
+            event.setTrade(trade);
+
+            String typeStr = payload.getOrDefault("eventType", EventType.RATE_CHANGE.name()).toString();
+            EventType eventType = EventType.valueOf(typeStr.toUpperCase());
+            event.setEventType(eventType);
+
+            LocalDate eventDate = payload.get("eventDate") != null
+                ? LocalDate.parse(payload.get("eventDate").toString())
+                : LocalDate.now();
+            event.setEventDate(eventDate);
+
+            if (payload.get("rate") != null) {
+                event.setRate(new BigDecimal(payload.get("rate").toString()));
+            }
+
+            if (payload.get("amountChange") != null) {
+                event.setAmountChange(new BigDecimal(payload.get("amountChange").toString()));
+            }
+
+            if (payload.get("notes") != null) {
+                event.setNotes(payload.get("notes").toString());
+            }
+
+            FinancingEvent saved = financingEventRepository.save(event);
+
+            // Применяем изменения к сделке (быстрый пересчёт)
+            if (eventType == EventType.REPAYMENT && event.getAmountChange() != null) {
+                BigDecimal borrowed = trade.getBorrowedAmount() == null ? BigDecimal.ZERO : trade.getBorrowedAmount();
+                BigDecimal updated = borrowed.subtract(event.getAmountChange());
+                if (updated.compareTo(BigDecimal.ZERO) < 0) updated = BigDecimal.ZERO;
+                trade.setBorrowedAmount(updated.setScale(2, RoundingMode.HALF_UP));
+            } else if (eventType == EventType.COLLATERAL_TOPUP && event.getAmountChange() != null) {
+                BigDecimal collateral = trade.getCollateralAmount() == null ? BigDecimal.ZERO : trade.getCollateralAmount();
+                BigDecimal updated = collateral.add(event.getAmountChange());
+                trade.setCollateralAmount(updated.setScale(2, RoundingMode.HALF_UP));
+            } else if (eventType == EventType.RATE_CHANGE && event.getRate() != null) {
+                trade.setMarginAmount(event.getRate().setScale(4, RoundingMode.HALF_UP));
+            }
+
+            tradeRepository.save(trade);
+
+            return ResponseEntity.ok(Map.of(
+                "event", saved,
+                "tradeId", trade.getId(),
+                "borrowedAmount", trade.getBorrowedAmount(),
+                "collateralAmount", trade.getCollateralAmount(),
+                "currentRate", trade.getMarginAmount()
+            ));
+        } catch (Exception e) {
+            logger.error("Ошибка при добавлении события финансирования", e);
+            return ResponseEntity.badRequest().body(Map.of("message", "Ошибка добавления события: " + e.getMessage()));
+        }
+    }
+
     @GetMapping("/{id}")
     public ResponseEntity<?> getTrade(@PathVariable Long id,
                                                 @RequestHeader(value = "X-Portfolio-ID", required = false) Long portfolioId) {
-        return tradeRepository.findById(id)
-            .map(trade -> {
-                if (portfolioId != null && !trade.getPortfolio().getId().equals(portfolioId)) {
-                    return ResponseEntity.status(403).build();
-                }
-                return ResponseEntity.ok().body(trade);
-            })
-            .orElse(ResponseEntity.notFound().build());
+        User user = getAuthenticatedUser();
+        Optional<Trade> tradeOpt = tradeRepository.findByIdAndPortfolioUser(id, user);
+        if (tradeOpt.isEmpty()) {
+            return ResponseEntity.notFound().build();
+        }
+        Trade trade = tradeOpt.get();
+        if (portfolioId != null && !trade.getPortfolio().getId().equals(portfolioId)) {
+            return ResponseEntity.status(403).build();
+        }
+        return ResponseEntity.ok().body(trade);
     }
 
     @DeleteMapping("/{id}")
     public ResponseEntity<?> deleteTrade(@PathVariable Long id,
                                          @RequestHeader(value = "X-Portfolio-ID", required = false) Long portfolioId) {
-        if (!tradeRepository.existsById(id)) {
-            return ResponseEntity.notFound().build();
-        }
         try {
-            if (portfolioId != null && !tradeRepository.findById(id).get().getPortfolio().getId().equals(portfolioId)) {
+            User user = getAuthenticatedUser();
+            Optional<Trade> tradeOpt = tradeRepository.findByIdAndPortfolioUser(id, user);
+            if (tradeOpt.isEmpty()) {
+                return ResponseEntity.notFound().build();
+            }
+            Trade trade = tradeOpt.get();
+            if (portfolioId != null && !trade.getPortfolio().getId().equals(portfolioId)) {
                 return ResponseEntity.status(403).build();
             }
-            tradeRepository.deleteById(id);
+            tradeRepository.delete(trade);
             return ResponseEntity.ok().build();
         } catch (Exception e) {
             logger.error("Ошибка при удалении сделки", e);
@@ -362,8 +439,14 @@ public class TradeController {
             @RequestParam(required = false) String startDate,
             @RequestParam(required = false) String endDate,
             @RequestHeader(value = "X-Portfolio-ID", required = false) Long portfolioId) {
-        
-        List<Trade> allTrades = (portfolioId != null) ? tradeRepository.findByPortfolioId(portfolioId) : tradeRepository.findAll();
+        User user = getAuthenticatedUser();
+        List<Trade> allTrades;
+        if (portfolioId != null) {
+            Portfolio portfolio = getPortfolioForUser(portfolioId, user);
+            allTrades = tradeRepository.findByPortfolioIdAndPortfolioUser(portfolio.getId(), user);
+        } else {
+            allTrades = tradeRepository.findByPortfolioUser(user);
+        }
         
         // Фильтрация по дате, если указаны параметры
         if (startDate != null || endDate != null) {
@@ -421,8 +504,14 @@ public class TradeController {
             @RequestParam(required = false) String startDate,
             @RequestParam(required = false) String endDate,
             @RequestHeader(value = "X-Portfolio-ID", required = false) Long portfolioId) {
-        
-        List<Trade> allTrades = (portfolioId != null) ? tradeRepository.findByPortfolioId(portfolioId) : tradeRepository.findAll();
+        User user = getAuthenticatedUser();
+        List<Trade> allTrades;
+        if (portfolioId != null) {
+            Portfolio portfolio = getPortfolioForUser(portfolioId, user);
+            allTrades = tradeRepository.findByPortfolioIdAndPortfolioUser(portfolio.getId(), user);
+        } else {
+            allTrades = tradeRepository.findByPortfolioUser(user);
+        }
         
         // Фильтрация по дате, если указаны параметры
         LocalDate start = startDate != null ? 
@@ -477,8 +566,14 @@ public class TradeController {
             @RequestParam(required = false) String startDate,
             @RequestParam(required = false) String endDate,
             @RequestHeader(value = "X-Portfolio-ID", required = false) Long portfolioId) {
-        
-        List<Trade> allTrades = (portfolioId != null) ? tradeRepository.findByPortfolioId(portfolioId) : tradeRepository.findAll();
+        User user = getAuthenticatedUser();
+        List<Trade> allTrades;
+        if (portfolioId != null) {
+            Portfolio portfolio = getPortfolioForUser(portfolioId, user);
+            allTrades = tradeRepository.findByPortfolioIdAndPortfolioUser(portfolio.getId(), user);
+        } else {
+            allTrades = tradeRepository.findByPortfolioUser(user);
+        }
         
         // Фильтрация по дате, если указаны параметры
         if (startDate != null || endDate != null) {
@@ -533,6 +628,8 @@ public class TradeController {
         try {
             logger.info("Получен запрос на обновление процентных ставок");
             
+            User user = getAuthenticatedUser();
+
             @SuppressWarnings("unchecked")
             List<Map<String, Object>> rateChanges = (List<Map<String, Object>>) request.get("rateChanges");
             Boolean applyToOpenTrades = (Boolean) request.get("applyToOpenTrades");
@@ -542,7 +639,7 @@ public class TradeController {
             }
             
             // Получаем все открытые сделки
-            List<Trade> openTrades = tradeRepository.findAll().stream()
+            List<Trade> openTrades = tradeRepository.findByPortfolioUser(user).stream()
                 .filter(trade -> trade.getExitDate() == null)
                 .collect(Collectors.toList());
             
@@ -562,6 +659,7 @@ public class TradeController {
                     } else {
                         newRate = new BigDecimal(rateObj.toString());
                     }
+                    newRate = newRate.setScale(4, RoundingMode.HALF_UP);
                     
                     // Обновляем ставки во всех открытых сделках
                     List<Trade> updatedTrades = new ArrayList<>();
@@ -601,7 +699,7 @@ public class TradeController {
         }
     }
 
-    @GetMapping("/analytics/floating-rates-impact")
+    @PostMapping("/analytics/floating-rates-impact")
     public ResponseEntity<?> getFloatingRatesImpact(@RequestBody Map<String, Object> request) {
         try {
             @SuppressWarnings("unchecked")
@@ -610,25 +708,26 @@ public class TradeController {
             if (rateChanges == null || rateChanges.isEmpty()) {
                 return ResponseEntity.badRequest().body(Map.of("message", "Список изменений ставок пуст"));
             }
-            
-            List<Trade> openTrades = tradeRepository.findAll().stream()
+
+            User user = getAuthenticatedUser();
+            List<Trade> openTrades = tradeRepository.findByPortfolioUser(user).stream()
                 .filter(trade -> trade.getExitDate() == null)
                 .collect(Collectors.toList());
             
             // Рассчитываем влияние изменения ставок на открытые позиции
             double totalInvested = 0.0;
             double totalInterestOld = 0.0;
-            double totalInterestNew = 0.0;
-            
+
             for (Trade trade : openTrades) {
-                double investment = trade.getTotalCost();
-                totalInvested += investment;
-                
-                // Старые проценты (текущая ставка)
-                if (trade.getDailyInterestAmount() != null) {
-                    LocalDate entryDate = trade.getEntryDate();
-                    long daysHeld = ChronoUnit.DAYS.between(entryDate, LocalDate.now());
-                    totalInterestOld += trade.getDailyInterestAmount() * daysHeld;
+                Double investment = trade.getTotalCost();
+                if (investment != null) {
+                    totalInvested += investment;
+                }
+
+                Double dailyInterest = trade.getDailyInterestAmount();
+                if (dailyInterest != null && trade.getEntryDate() != null) {
+                    long daysHeld = ChronoUnit.DAYS.between(trade.getEntryDate(), LocalDate.now());
+                    totalInterestOld += dailyInterest * daysHeld;
                 }
             }
             
@@ -653,7 +752,8 @@ public class TradeController {
             @PathVariable Long id,
             @RequestBody Map<String, Object> payload) {
         try {
-            Optional<Trade> optTrade = tradeRepository.findById(id);
+            User user = getAuthenticatedUser();
+            Optional<Trade> optTrade = tradeRepository.findByIdAndPortfolioUser(id, user);
             if (optTrade.isEmpty()) {
                 return ResponseEntity.notFound().build();
             }
@@ -690,10 +790,236 @@ public class TradeController {
             tradeClosureRepository.save(closure);
 
             // Возвращаем обновлённую сделку с открытиями и закрытиями
-            return ResponseEntity.ok(Map.of("message", "Частичное закрытие сохранено", "trade", tradeRepository.findById(id).get()));
+            return ResponseEntity.ok(Map.of("message", "Частичное закрытие сохранено", "trade", tradeRepository.findByIdAndPortfolioUser(id, user).get()));
         } catch (Exception e) {
             logger.error("Ошибка при частичном закрытии", e);
             return ResponseEntity.badRequest().body(Map.of("message", "Ошибка: " + e.getMessage()));
         }
+    }
+
+    /**
+     * FIFO закрытие по тикеру: закрывает указанное количество лотов, начиная с самых старых открытых сделок.
+     */
+    @PostMapping("/fifo-close")
+    public ResponseEntity<?> closeFifo(
+            @RequestBody Map<String, Object> payload,
+            @RequestHeader(value = "X-Portfolio-ID") Long portfolioId) {
+        try {
+            User user = getAuthenticatedUser();
+            Portfolio portfolio = getPortfolioForUser(portfolioId, user);
+
+            String symbol = payload.getOrDefault("symbol", "").toString().trim().toUpperCase();
+            if (symbol.isEmpty()) {
+                return ResponseEntity.badRequest().body(Map.of("message", "Тикер обязателен"));
+            }
+
+            if (!payload.containsKey("quantity")) {
+                return ResponseEntity.badRequest().body(Map.of("message", "quantity обязателен"));
+            }
+            int qtyToClose = ((Number) payload.get("quantity")).intValue();
+            if (qtyToClose <= 0) {
+                return ResponseEntity.badRequest().body(Map.of("message", "quantity должен быть > 0"));
+            }
+
+            if (!payload.containsKey("exitPrice")) {
+                return ResponseEntity.badRequest().body(Map.of("message", "exitPrice обязателен"));
+            }
+            BigDecimal exitPrice = new BigDecimal(payload.get("exitPrice").toString());
+            LocalDate exitDate = payload.containsKey("exitDate") && payload.get("exitDate") != null
+                    ? LocalDate.parse(payload.get("exitDate").toString())
+                    : LocalDate.now();
+            String notes = payload.getOrDefault("notes", "").toString();
+
+            Map<String, Object> response = tradeService.fifoClose(user, portfolio, symbol, qtyToClose, exitPrice, exitDate, notes);
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            logger.error("Ошибка при FIFO закрытии", e);
+            return ResponseEntity.badRequest().body(Map.of("message", "Ошибка FIFO закрытия: " + e.getMessage()));
+        }
+    }
+
+    private User getAuthenticatedUser() {
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication == null || !authentication.isAuthenticated()) {
+            throw new RuntimeException("Пользователь не авторизован");
+        }
+        String username = authentication.getName();
+        return userService.findByUsername(username)
+                .orElseThrow(() -> new RuntimeException("Пользователь не найден"));
+    }
+
+    private Portfolio getPortfolioForUser(Long portfolioId, User user) {
+        return portfolioRepository.findByIdAndUser(portfolioId, user)
+                .filter(portfolio -> portfolio.getIsActive() == null || Boolean.TRUE.equals(portfolio.getIsActive()))
+                .orElseThrow(() -> new RuntimeException("Портфель не найден или недоступен"));
+    }
+
+    /**
+     * Сводная статистика по маржинальным сделкам (на бэке, чтобы не считать на фронте).
+     */
+    @GetMapping("/stats")
+    public ResponseEntity<?> getStats(@RequestHeader(value = "X-Portfolio-ID", required = false) Long portfolioId) {
+        User user = getAuthenticatedUser();
+        List<Trade> trades = portfolioId != null
+                ? tradeRepository.findByPortfolioIdAndPortfolioUser(portfolioId, user)
+                : tradeRepository.findByPortfolioUser(user);
+
+        double totalCostOpen = 0;
+        double totalSharesOpen = 0;
+        double borrowedTotal = 0;
+        double weightedRate = 0;
+        double weight = 0;
+        double totalInterestDaily = 0;
+        double totalInterestMonthly = 0;
+        double totalAccruedInterest = 0;
+        double closedProfit = 0;
+        double totalInterestPaid = 0;
+        double potentialProfit = 0;
+        double potentialProfitAfterInterest = 0;
+        int openCount = 0;
+        int closedCount = 0;
+
+        for (Trade t : trades) {
+            double total = safeMul(t.getEntryPrice(), t.getQuantity());
+            double borrowed = t.getBorrowedAmount() != null ? t.getBorrowedAmount().doubleValue() : total;
+
+            // Текущая дневная ставка по сделке
+            Double daily = t.getDailyInterestAmount();
+            double rateToday;
+            if (daily != null && borrowed > 0) {
+                rateToday = daily * 365 * 100 / borrowed;
+            } else {
+                rateToday = t.getMarginAmount() != null ? t.getMarginAmount().doubleValue() : 0;
+                daily = borrowed * rateToday / 100 / 365;
+            }
+
+            if (t.getExitDate() == null) {
+                openCount++;
+                totalCostOpen += total;
+                totalSharesOpen += t.getQuantity() != null ? t.getQuantity() : 0;
+                borrowedTotal += borrowed;
+                weightedRate += rateToday * borrowed;
+                weight += borrowed;
+                totalInterestDaily += daily != null ? daily : 0;
+                totalInterestMonthly += (daily != null ? daily : 0) * 30;
+
+                Double price = getLivePrice(t.getSymbol());
+                if (price != null) {
+                    double pot = (price - t.getEntryPrice().doubleValue()) * t.getQuantity();
+                    potentialProfit += pot;
+                    double accrued = t.getTotalInterest() != null ? t.getTotalInterest() : 0;
+                    potentialProfitAfterInterest += pot - accrued;
+                }
+            } else {
+                closedCount++;
+                if (t.getExitPrice() != null) {
+                    closedProfit += (t.getExitPrice().doubleValue() - t.getEntryPrice().doubleValue()) * t.getQuantity();
+                }
+            }
+
+            Double totalInterest = t.getTotalInterest();
+            if (totalInterest != null) {
+                totalAccruedInterest += totalInterest;
+                if (t.getExitDate() != null) {
+                    totalInterestPaid += totalInterest;
+                }
+            }
+        }
+
+        double avgRate = weight > 0 ? weightedRate / weight : 0;
+
+        Map<String, Object> resp = new HashMap<>();
+        resp.put("totalCostOpen", round(totalCostOpen));
+        resp.put("totalSharesOpen", round(totalSharesOpen));
+        resp.put("borrowedTotal", round(borrowedTotal));
+        resp.put("avgRate", round(avgRate, 2));
+        resp.put("totalInterestDaily", round(totalInterestDaily));
+        resp.put("totalInterestMonthly", round(totalInterestMonthly));
+        resp.put("totalInterestYearly", round(totalInterestDaily * 365));
+        resp.put("totalAccruedInterest", round(totalAccruedInterest));
+        resp.put("totalInterestPaid", round(totalInterestPaid));
+        resp.put("totalProfit", round(closedProfit));
+        resp.put("totalOverallProfitAfterInterest", round(closedProfit - totalInterestPaid));
+        resp.put("potentialProfit", round(potentialProfit));
+        resp.put("potentialProfitAfterInterest", round(potentialProfitAfterInterest));
+        resp.put("totalOverallProfit", round(closedProfit + potentialProfit));
+        resp.put("totalOverallProfitNet", round(closedProfit - totalInterestPaid + potentialProfitAfterInterest));
+        resp.put("openCount", openCount);
+        resp.put("closedCount", closedCount);
+
+        return ResponseEntity.ok(resp);
+    }
+
+    /**
+     * Детализация открытых позиций (для карточек/таблиц на фронте).
+     */
+    @GetMapping("/positions/open")
+    public ResponseEntity<?> getOpenPositions(@RequestHeader(value = "X-Portfolio-ID", required = false) Long portfolioId) {
+        try {
+            logger.debug("GET /api/trades/positions portfolioId={}", portfolioId);
+            User user = getAuthenticatedUser();
+            List<Trade> trades = portfolioId != null
+                    ? tradeRepository.findByPortfolioIdAndPortfolioUser(portfolioId, user)
+                    : tradeRepository.findByPortfolioUser(user);
+
+            List<Map<String, Object>> positions = trades.stream()
+                    .filter(t -> t.getExitDate() == null)
+                    .map(t -> {
+                        double total = safeMul(t.getEntryPrice(), t.getQuantity());
+                        double borrowed = t.getBorrowedAmount() != null ? t.getBorrowedAmount().doubleValue() : total;
+                        double ltv = total > 0 ? (borrowed / total) * 100 : 0;
+                        Double dailyInterest = t.getDailyInterestAmount();
+                        double rateToday;
+                        if (dailyInterest != null && borrowed > 0) {
+                            rateToday = dailyInterest * 365 * 100 / borrowed;
+                        } else {
+                            rateToday = t.getMarginAmount() != null ? t.getMarginAmount().doubleValue() : 0;
+                            dailyInterest = borrowed * rateToday / 100 / 365;
+                        }
+                        long heldDays = 0;
+                        if (t.getEntryDate() != null) {
+                            heldDays = ChronoUnit.DAYS.between(t.getEntryDate(), LocalDate.now());
+                            if (heldDays < 0) heldDays = 0;
+                        }
+                        Map<String, Object> row = new HashMap<>();
+                        row.put("id", t.getId());
+                        row.put("symbol", t.getSymbol());
+                        row.put("entryPrice", t.getEntryPrice());
+                        row.put("quantity", t.getQuantity());
+                        row.put("entryDate", t.getEntryDate());
+                        row.put("borrowed", round(borrowed));
+                        row.put("exposure", round(total));
+                        row.put("ltv", round(ltv, 2));
+                        row.put("rate", round(rateToday, 2));
+                        row.put("interestPerDay", round(dailyInterest != null ? dailyInterest : 0));
+                        row.put("maintenanceMargin", t.getMaintenanceMargin());
+                        row.put("heldDays", heldDays);
+                        return row;
+                    })
+                    .toList();
+
+            return ResponseEntity.ok(positions);
+        } catch (Exception e) {
+            logger.error("Ошибка в /api/trades/positions", e);
+            return ResponseEntity.ok(Collections.emptyList());
+        }
+    }
+
+    private double safeMul(BigDecimal price, Integer qty) {
+        if (price == null || qty == null) return 0;
+        return price.doubleValue() * qty;
+    }
+
+    private double round(double val) {
+        return round(val, 2);
+    }
+
+    private double round(double val, int scale) {
+        return BigDecimal.valueOf(val).setScale(scale, RoundingMode.HALF_UP).doubleValue();
+    }
+
+    private Double getLivePrice(String ticker) {
+        Quote quote = priceService.getPrice(ticker, 600);
+        return quote != null ? quote.price() : null;
     }
 }

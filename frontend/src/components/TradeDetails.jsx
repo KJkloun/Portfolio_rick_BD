@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import axios from 'axios';
+import MarginPageShell from './margin/MarginPageShell';
 
 function TradeDetails() {
   const { id } = useParams();
@@ -51,24 +52,34 @@ function TradeDetails() {
     }
   };
 
-  if (loading) return <div className="p-4">Загрузка...</div>;
-  if (error) return <div className="p-4 text-red-500">{error}</div>;
+  if (loading) return <MarginPageShell title="Сделка" subtitle="Загрузка..."><div className="p-4">Загрузка...</div></MarginPageShell>;
+  if (error) return <MarginPageShell title="Сделка" subtitle="Ошибка"><div className="p-4 text-red-500">{error}</div></MarginPageShell>;
   if (!trade) return null;
 
   const openQty = trade.openQuantity ?? trade.quantity; // backend transient serialization might be camel-case
+  const liquidation = trade.liquidationPrice ? Number(trade.liquidationPrice).toFixed(2) : null;
 
   return (
-    <div className="max-w-3xl mx-auto p-4 space-y-6">
-      <button onClick={() => navigate(-1)} className="text-sm text-gray-500 hover:text-gray-700">← Назад</button>
-
+    <MarginPageShell
+      title={`Сделка ${trade.symbol}`}
+      subtitle={`Дата входа ${trade.entryDate}`}
+      badge="Trade"
+      actions={
+        <button onClick={() => navigate(-1)} className="px-3 py-2 text-sm rounded-lg border border-gray-200 text-gray-700 hover:bg-gray-50">← Назад</button>
+      }
+    >
       <div className="bg-white rounded-xl shadow p-4">
-        <h2 className="text-xl font-semibold mb-2">Сделка {trade.symbol}</h2>
         <div className="text-sm space-y-1">
           <div>Дата входа: {trade.entryDate}</div>
           <div>Цена входа: ₽{trade.entryPrice}</div>
           <div>Количество: {trade.quantity}</div>
           <div>Открыто осталось: {openQty}</div>
           <div>Процент кредита: {trade.marginAmount}%</div>
+          {trade.leverage && <div>Плечо: {trade.leverage}x</div>}
+          {trade.borrowedAmount != null && <div>Заёмные средства: ₽{trade.borrowedAmount}</div>}
+          {trade.collateralAmount != null && <div>Собственные средства: ₽{trade.collateralAmount}</div>}
+          {trade.maintenanceMargin != null && <div>Поддерживающая маржа: {trade.maintenanceMargin}%</div>}
+          {liquidation && <div>Цена ликвидации (оценочно): ₽{liquidation}</div>}
         </div>
       </div>
 
@@ -115,7 +126,7 @@ function TradeDetails() {
           {successMsg && <div className="text-green-600 text-sm mt-1">{successMsg}</div>}
         </div>
       )}
-    </div>
+    </MarginPageShell>
   );
 }
 

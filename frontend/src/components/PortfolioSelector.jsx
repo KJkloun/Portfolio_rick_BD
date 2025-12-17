@@ -8,7 +8,6 @@ function PortfolioSelector() {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [newPortfolio, setNewPortfolio] = useState({
     name: '',
-    type: 'MARGIN',
     currency: 'RUB',
     description: ''
   });
@@ -32,14 +31,14 @@ function PortfolioSelector() {
 
     const result = await createPortfolio(
       newPortfolio.name,
-      newPortfolio.type,
+      'MARGIN',
       newPortfolio.currency,
       newPortfolio.description
     );
 
     if (result.success) {
       setShowCreateModal(false);
-      setNewPortfolio({ name: '', type: 'MARGIN', currency: 'RUB', description: '' });
+      setNewPortfolio({ name: '', currency: 'RUB', description: '' });
       selectPortfolio(result.portfolio);
     } else {
       setError(result.message);
@@ -92,11 +91,16 @@ function PortfolioSelector() {
             <div
               key={portfolio.id}
               onClick={() => selectPortfolio(portfolio)}
+              onDoubleClick={() => {
+                selectPortfolio(portfolio);
+                navigate('/overview');
+              }}
               className={`relative bg-white rounded-2xl p-6 shadow-lg hover:shadow-xl transition-all duration-300 transform hover:-translate-y-1 border cursor-pointer ${
                 currentPortfolio?.id === portfolio.id 
                   ? 'border-purple-500 ring-2 ring-purple-200' 
                   : 'border-gray-100'
               }`}
+              title="Клик — выбрать, двойной клик — войти"
             >
               {/* Delete button */}
               <button
@@ -109,27 +113,13 @@ function PortfolioSelector() {
                 </svg>
               </button>
               <div className="flex items-center justify-between mb-4">
-                <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${
-                  portfolio.type === 'MARGIN' 
-                    ? 'bg-gradient-to-br from-purple-500 to-indigo-600' 
-                    : 'bg-gradient-to-br from-emerald-500 to-teal-600'
-                }`}>
-                  {portfolio.type === 'MARGIN' ? (
-                    <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
-                    </svg>
-                  ) : (
-                    <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-                    </svg>
-                  )}
+                <div className="w-12 h-12 rounded-xl flex items-center justify-center bg-gradient-to-br from-slate-900 to-indigo-700">
+                  <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+                  </svg>
                 </div>
-                <span className={`text-xs font-medium px-2 py-1 rounded-full ${
-                  portfolio.type === 'MARGIN' 
-                    ? 'bg-purple-100 text-purple-800' 
-                    : 'bg-emerald-100 text-emerald-800'
-                }`}>
-                  {portfolio.typeDisplay}
+                <span className="text-xs font-medium px-2 py-1 rounded-full bg-slate-100 text-slate-800">
+                  Портфель
                 </span>
               </div>
                              <h3 className="text-lg font-semibold text-gray-900 mb-2">
@@ -176,13 +166,7 @@ function PortfolioSelector() {
         {currentPortfolio && (
           <div className="text-center">
             <button
-              onClick={() => {
-                if (currentPortfolio.type === 'MARGIN') {
-                  navigate('/margin');
-                } else {
-                  navigate('/spot');
-                }
-              }}
+              onClick={() => navigate('/overview')}
               className="bg-gradient-to-r from-purple-500 to-indigo-600 text-white px-8 py-3 rounded-lg font-medium hover:from-purple-600 hover:to-indigo-700 focus:ring-2 focus:ring-purple-400 focus:ring-offset-2"
             >
               Перейти к управлению портфелем
@@ -218,20 +202,6 @@ function PortfolioSelector() {
                     placeholder="Например, Основной портфель"
                   />
                 </div>
-
-                                 <div>
-                   <label className="block text-sm font-medium text-gray-700 mb-2">
-                     Тип портфеля
-                   </label>
-                   <select
-                     value={newPortfolio.type}
-                     onChange={(e) => setNewPortfolio({...newPortfolio, type: e.target.value})}
-                     className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:ring-1 focus:ring-purple-400 focus:border-purple-400"
-                   >
-                     <option value="MARGIN">Маржинальный</option>
-                     <option value="SPOT">Спотовый</option>
-                   </select>
-                 </div>
 
                  <div>
                    <label className="block text-sm font-medium text-gray-700 mb-2">

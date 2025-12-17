@@ -7,6 +7,8 @@ import Register from './components/Register';
 import PortfolioSelector from './components/PortfolioSelector';
 import MarginTrading from './components/MarginTrading';
 import SpotTrading from './components/SpotTrading';
+import Dashboard from './components/Dashboard';
+import AppLayout from './components/common/AppLayout';
 import './index.css';
 
 function ProtectedRoute({ children }) {
@@ -35,7 +37,7 @@ function AppRoutes() {
       <Route path="/login" element={!isAuthenticated ? <Login /> : <Navigate to="/portfolios" />} />
       <Route path="/register" element={!isAuthenticated ? <Register /> : <Navigate to="/portfolios" />} />
       
-      {/* Защищенные маршруты */}
+      {/* Портфели без верхнего дашборда */}
       <Route path="/portfolios" element={
         <ProtectedRoute>
           <PortfolioProvider>
@@ -43,22 +45,19 @@ function AppRoutes() {
           </PortfolioProvider>
         </ProtectedRoute>
       } />
-      
-      <Route path="/margin/*" element={
+
+      {/* Остальные разделы под единым лейаутом */}
+      <Route element={
         <ProtectedRoute>
           <PortfolioProvider>
-            <MarginTrading />
+            <AppLayout />
           </PortfolioProvider>
         </ProtectedRoute>
-      } />
-      
-      <Route path="/spot/*" element={
-        <ProtectedRoute>
-          <PortfolioProvider>
-            <SpotTrading />
-          </PortfolioProvider>
-        </ProtectedRoute>
-      } />
+      }>
+        <Route path="/overview" element={<Dashboard />} />
+        <Route path="/margin/*" element={<MarginTrading />} />
+        <Route path="/spot/*" element={<SpotTrading />} />
+      </Route>
       
       {/* Переадресация главной страницы */}
       <Route path="/" element={

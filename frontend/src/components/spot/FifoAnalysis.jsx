@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { formatPortfolioCurrency } from '../../utils/currencyFormatter';
+import { fetchPricesMap } from '../../utils/priceClient';
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -17,6 +18,7 @@ import { Line, Bar, Doughnut, Scatter } from 'react-chartjs-2';
 import { format, differenceInDays } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import { usePortfolio } from '../../contexts/PortfolioContext';
+import SpotPageShell from './SpotPageShell';
 
 ChartJS.register(
   CategoryScale,
@@ -51,71 +53,68 @@ const FifoAnalysis = () => {
   const [selectedTicker, setSelectedTicker] = useState('');
 
   // Получаем сохранённые курсы акций из localStorage один раз при монтировании
-  const getSavedPrices = () => {
-    try {
-      return JSON.parse(localStorage.getItem('stockPrices')) || {};
-    } catch {
-      return {};
-    }
-  };
-  const savedPrices = getSavedPrices();
-
   useEffect(() => {
-    fetchTransactions();
+    fetchData();
   }, [currentPortfolio, refreshTrigger]);
 
-  useEffect(() => {
-    if (transactions.length > 0) {
-      calculateFifoAnalysis();
-    }
-  }, [transactions]);
-
-  const fetchTransactions = async () => {
+  const fetchData = async () => {
     if (!currentPortfolio?.id) {
       setLoading(false);
       return;
     }
 
     try {
-      const response = await axios.get('/api/spot-transactions', {
-        headers: {
-          'X-Portfolio-ID': currentPortfolio.id
-        }
-      });
-      
-      const data = response.data;
+      const [txResp, statsResp] = await Promise.all([
+        axios.get('/api/spot-transactions', { headers: { 'X-Portfolio-ID': currentPortfolio.id } }),
+        axios.get('/api/spot-transactions/stats', { headers: { 'X-Portfolio-ID': currentPortfolio.id } })
+      ]);
+
+      const data = txResp.data;
       const transformedData = Array.isArray(data) ? data.map(tx => ({
         ...tx,
         tradeDate: tx.transactionDate || tx.tradeDate,
         totalAmount: tx.amount || tx.totalAmount
       })) : [];
-      
+
       setTransactions(transformedData);
+
+      // Готовые позиции на бэке для быстрых метрик
+      const positionsResp = await axios.get('/api/spot-transactions/positions/open', { headers: { 'X-Portfolio-ID': currentPortfolio.id } });
+      const positions = Array.isArray(positionsResp.data) ? positionsResp.data : [];
+
+      const priceMap = await fetchPricesMap(positions.map(p => p.ticker));
+
+      // Собираем FIFO для продаж (реализованный P/L)
+      const fifoResultsData = buildFifoMatches(transformedData);
+      const enriched = fifoResultsData.map(row => ({
+        ...row,
+        currentPrice: priceMap[row.ticker] || row.salePrice || row.purchasePrice || 0
+      }));
+
+      setFifoResults(enriched);
     } catch (error) {
-      console.error('Error fetching transactions:', error);
+      console.error('Error fetching FIFO data:', error);
       setError('Ошибка загрузки данных: ' + error.message);
     } finally {
       setLoading(false);
     }
   };
 
-  const calculateFifoAnalysis = () => {
-    // Group transactions by ticker
+  const buildFifoMatches = (txs) => {
     const tickerGroups = {};
-    
-    transactions.forEach(tx => {
+
+    txs.forEach(tx => {
       if (!tx.ticker || tx.ticker === 'USD') return;
-      
+
       if (!tickerGroups[tx.ticker]) {
         tickerGroups[tx.ticker] = {
           ticker: tx.ticker,
           company: tx.company,
           purchases: [],
-          sales: [],
-          fifoMatches: []
+          sales: []
         };
       }
-      
+
       if (tx.transactionType === 'BUY') {
         tickerGroups[tx.ticker].purchases.push({
           ...tx,
@@ -126,30 +125,27 @@ const FifoAnalysis = () => {
       }
     });
 
-    // Calculate FIFO matches for each ticker
     const results = [];
-    
+
     Object.values(tickerGroups).forEach(group => {
       if (group.sales.length === 0) return;
-      
-      // Sort purchases and sales by date
+
       group.purchases.sort((a, b) => new Date(a.tradeDate) - new Date(b.tradeDate));
       group.sales.sort((a, b) => new Date(a.tradeDate) - new Date(b.tradeDate));
-      
-      // Process each sale using FIFO
+
       group.sales.forEach(sale => {
         let remainingSaleQuantity = sale.quantity || 0;
         const saleMatches = [];
-        
+
         for (let i = 0; i < group.purchases.length && remainingSaleQuantity > 0; i++) {
           const purchase = group.purchases[i];
-          
+
           if (purchase.remainingQuantity > 0) {
             const matchQuantity = Math.min(remainingSaleQuantity, purchase.remainingQuantity);
             const purchaseCostBasis = (purchase.price || 0) * matchQuantity;
             const saleProceeds = (sale.price || 0) * matchQuantity;
             const realizedPL = saleProceeds - purchaseCostBasis;
-            
+
             saleMatches.push({
               saleDate: sale.tradeDate,
               salePrice: sale.price,
@@ -161,13 +157,12 @@ const FifoAnalysis = () => {
               realizedPL,
               realizedPLPercent: purchaseCostBasis > 0 ? (realizedPL / purchaseCostBasis) * 100 : 0
             });
-            
+
             purchase.remainingQuantity -= matchQuantity;
             remainingSaleQuantity -= matchQuantity;
           }
         }
-        
-        // Add matches to results
+
         saleMatches.forEach(match => {
           results.push({
             ticker: group.ticker,
@@ -177,10 +172,9 @@ const FifoAnalysis = () => {
         });
       });
     });
-    
-    // Sort results by sale date (newest first)
+
     results.sort((a, b) => new Date(b.saleDate) - new Date(a.saleDate));
-    setFifoResults(results);
+    return results;
   };
 
   // Get unique tickers for the dropdown
@@ -236,21 +230,22 @@ const FifoAnalysis = () => {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-gray-50 to-white flex items-center justify-center">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-800 mx-auto mb-4"></div>
-          <p className="text-gray-500">Загрузка FIFO анализа...</p>
+      <SpotPageShell title="FIFO Анализ" subtitle="Анализ реализованной прибыли/убытка" badge="Spot портфель">
+        <div className="flex items-center justify-center py-24 text-slate-500">
+          <div className="text-center">
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-slate-800 mx-auto mb-4"></div>
+            <p>Загрузка FIFO анализа...</p>
+          </div>
         </div>
-      </div>
+      </SpotPageShell>
     );
   }
 
   if (error) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-gray-50 to-white flex items-center justify-center">
-        <div className="text-center">
-          <div className="text-red-500 mb-4">⚠️</div>
-          <p className="text-gray-700 mb-4">{error}</p>
+      <SpotPageShell title="FIFO Анализ" subtitle="Анализ реализованной прибыли/убытка" badge="Spot портфель">
+        <div className="text-center space-y-3 py-16">
+          <p className="text-gray-700">{error}</p>
           <button
             onClick={() => window.location.href = '/'}
             className="bg-gray-800 text-white px-4 py-2 rounded-lg hover:bg-gray-700 transition-colors"
@@ -258,16 +253,15 @@ const FifoAnalysis = () => {
             Выбрать портфель
           </button>
         </div>
-      </div>
+      </SpotPageShell>
     );
   }
 
   if (!currentPortfolio) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-gray-50 to-white flex items-center justify-center">
-        <div className="text-center">
-          <div className="text-gray-400 mb-4">📊</div>
-          <p className="text-gray-700 mb-4">Портфель не выбран</p>
+      <SpotPageShell title="FIFO Анализ" subtitle="Анализ реализованной прибыли/убытка" badge="Spot портфель">
+        <div className="text-center space-y-3 py-16">
+          <p className="text-gray-700 mb-2">Портфель не выбран</p>
           <button
             onClick={() => window.location.href = '/'}
             className="bg-gray-800 text-white px-4 py-2 rounded-lg hover:bg-gray-700 transition-colors"
@@ -275,22 +269,20 @@ const FifoAnalysis = () => {
             Выбрать портфель
           </button>
         </div>
-      </div>
+      </SpotPageShell>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-white">
-      <div className="container-fluid p-4 max-w-7xl mx-auto">
-        {/* Header */}
-        <div className="mb-6">
-          <h3 className="text-2xl font-light text-gray-800 mb-2">FIFO Анализ</h3>
-          <p className="text-gray-500">Анализ реализованной прибыли/убытка по методу "первым пришел - первым ушел" ({currentPortfolio?.currency || 'USD'})</p>
-        </div>
+    <SpotPageShell
+      title="FIFO Анализ"
+      subtitle={`Анализ реализованной прибыли/убытка по методу \"первым пришел - первым ушел\" (${currentPortfolio?.currency || 'USD'})`}
+      badge="Spot портфель"
+    >
 
         {/* Summary Cards */}
         <div className="mb-6 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          <div className="bg-white/70 backdrop-blur-sm rounded-2xl shadow-sm border-0 overflow-hidden">
+          <div className="bg-white/80 backdrop-blur-sm rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
             <div className="px-6 py-4 text-center">
               <div className={`text-2xl font-light ${summary.totalRealizedPL >= 0 ? 'text-green-500' : 'text-red-500'}`}>
                 {formatCurrency(summary.totalRealizedPL)}
@@ -299,7 +291,7 @@ const FifoAnalysis = () => {
             </div>
           </div>
           
-          <div className="bg-white/70 backdrop-blur-sm rounded-2xl shadow-sm border-0 overflow-hidden">
+          <div className="bg-white/80 backdrop-blur-sm rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
             <div className="px-6 py-4 text-center">
               <div className="text-2xl font-light text-blue-500">
                 {winRate.toFixed(1)}%
@@ -308,7 +300,7 @@ const FifoAnalysis = () => {
             </div>
           </div>
           
-          <div className="bg-white/70 backdrop-blur-sm rounded-2xl shadow-sm border-0 overflow-hidden">
+          <div className="bg-white/80 backdrop-blur-sm rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
             <div className="px-6 py-4 text-center">
               <div className="text-2xl font-light text-indigo-600">
                 {filteredResults.length}
@@ -317,7 +309,7 @@ const FifoAnalysis = () => {
             </div>
           </div>
           
-          <div className="bg-white/70 backdrop-blur-sm rounded-2xl shadow-sm border-0 overflow-hidden">
+          <div className="bg-white/80 backdrop-blur-sm rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
             <div className="px-6 py-4 text-center">
               <div className={`text-2xl font-light ${avgRealizedPL >= 0 ? 'text-green-500' : 'text-red-500'}`}>
                 {formatCurrency(avgRealizedPL)}
@@ -329,7 +321,7 @@ const FifoAnalysis = () => {
 
         {/* Additional Statistics */}
         <div className="mb-6 grid grid-cols-1 lg:grid-cols-3 gap-4">
-          <div className="bg-white/70 backdrop-blur-sm rounded-2xl shadow-sm border-0 overflow-hidden">
+          <div className="bg-white/80 backdrop-blur-sm rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
             <div className="px-6 py-4">
               <h6 className="text-base font-medium text-gray-700 mb-3">Общая статистика</h6>
               <div className="space-y-2 text-sm">
@@ -349,7 +341,7 @@ const FifoAnalysis = () => {
             </div>
           </div>
 
-          <div className="bg-white/70 backdrop-blur-sm rounded-2xl shadow-sm border-0 overflow-hidden">
+          <div className="bg-white/80 backdrop-blur-sm rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
             <div className="px-6 py-4">
               <h6 className="text-base font-medium text-gray-700 mb-3">Прибыльные сделки</h6>
               <div className="space-y-2 text-sm">
@@ -371,7 +363,7 @@ const FifoAnalysis = () => {
             </div>
           </div>
 
-          <div className="bg-white/70 backdrop-blur-sm rounded-2xl shadow-sm border-0 overflow-hidden">
+          <div className="bg-white/80 backdrop-blur-sm rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
             <div className="px-6 py-4">
               <h6 className="text-base font-medium text-gray-700 mb-3">Убыточные сделки</h6>
               <div className="space-y-2 text-sm">
@@ -398,19 +390,19 @@ const FifoAnalysis = () => {
         </div>
 
         {/* FIFO Results Table */}
-        <div className="bg-white/70 backdrop-blur-sm rounded-2xl shadow-sm border-0 overflow-hidden">
+        <div className="bg-white/80 backdrop-blur-sm rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
           <div className="px-6 py-4">
             <div className="flex justify-between items-center mb-3">
               <div>
-                <h6 className="text-lg font-medium text-gray-700 mb-1">FIFO Сопоставления</h6>
-                <p className="text-sm text-gray-400">Детальный анализ сопоставления продаж с покупками</p>
+                <h6 className="text-lg font-semibold text-slate-900 mb-1">FIFO Сопоставления</h6>
+                <p className="text-sm text-slate-500">Детальный анализ сопоставления продаж с покупками</p>
               </div>
               <div className="flex items-center space-x-3">
-                <label className="text-sm font-medium text-gray-600">Фильтр по акции:</label>
+                <label className="text-sm font-medium text-slate-600">Фильтр по акции:</label>
                 <select
                   value={selectedTicker}
                   onChange={(e) => setSelectedTicker(e.target.value)}
-                  className="px-3 py-1.5 border-0 bg-white rounded-lg focus:ring-2 focus:ring-gray-300 focus:outline-none text-sm shadow-sm min-w-[120px]"
+                  className="px-3 py-1.5 border border-slate-200 bg-white rounded-lg focus:ring-2 focus:ring-slate-300 focus:outline-none text-sm shadow-sm min-w-[140px]"
                 >
                   <option value="">Все акции</option>
                   {getAvailableTickers().map(ticker => (
@@ -424,51 +416,51 @@ const FifoAnalysis = () => {
           {filteredResults.length > 0 ? (
             <div className="overflow-x-auto">
               <table className="w-full">
-                <thead>
-                  <tr className="border-b border-gray-100">
-                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500">Тикер</th>
-                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500">Дата продажи</th>
-                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500">Дата покупки</th>
-                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-500">Количество</th>
-                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-500">Цена покупки</th>
-                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-500">Цена продажи</th>
-                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-500">Себестоимость</th>
-                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-500">Выручка</th>
-                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-500">П/У</th>
-                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-500">П/У %</th>
+                <thead className="bg-slate-50">
+                  <tr className="border-b border-slate-100">
+                    <th className="px-4 py-3 text-left text-xs font-medium text-slate-500">Тикер</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-slate-500">Дата продажи</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-slate-500">Дата покупки</th>
+                    <th className="px-4 py-3 text-right text-xs font-medium text-slate-500">Количество</th>
+                    <th className="px-4 py-3 text-right text-xs font-medium text-slate-500">Цена покупки</th>
+                    <th className="px-4 py-3 text-right text-xs font-medium text-slate-500">Цена продажи</th>
+                    <th className="px-4 py-3 text-right text-xs font-medium text-slate-500">Себестоимость</th>
+                    <th className="px-4 py-3 text-right text-xs font-medium text-slate-500">Выручка</th>
+                    <th className="px-4 py-3 text-right text-xs font-medium text-slate-500">П/У</th>
+                    <th className="px-4 py-3 text-right text-xs font-medium text-slate-500">П/У %</th>
                   </tr>
                 </thead>
                 <tbody>
                   {filteredResults.map((result, index) => (
-                    <tr key={index} className="border-b border-gray-50 hover:bg-gray-50/50 transition-colors">
-                      <td className="px-4 py-4 text-sm font-medium text-gray-800">
+                    <tr key={index} className="border-b border-slate-50 hover:bg-slate-50/60 transition-colors">
+                      <td className="px-4 py-4 text-sm font-semibold text-slate-900">
                         {result.ticker}
                       </td>
-                      <td className="px-4 py-4 text-sm text-gray-800">
+                      <td className="px-4 py-4 text-sm text-slate-800">
                         {result.saleDate ? format(new Date(result.saleDate), 'dd.MM.yyyy', { locale: ru }) : '-'}
                       </td>
-                      <td className="px-4 py-4 text-sm text-gray-800">
+                      <td className="px-4 py-4 text-sm text-slate-800">
                         {result.purchaseDate ? format(new Date(result.purchaseDate), 'dd.MM.yyyy', { locale: ru }) : '-'}
                       </td>
-                      <td className="px-4 py-4 text-sm text-gray-800 text-right">
+                      <td className="px-4 py-4 text-sm text-slate-800 text-right">
                         {result.quantity?.toLocaleString() || 0}
                       </td>
-                      <td className="px-4 py-4 text-sm text-gray-800 text-right">
+                      <td className="px-4 py-4 text-sm text-slate-800 text-right">
                         {formatCurrency(result.purchasePrice || 0)}
                       </td>
-                      <td className="px-4 py-4 text-sm text-gray-800 text-right">
+                      <td className="px-4 py-4 text-sm text-slate-800 text-right">
                         {formatCurrency(result.salePrice || 0)}
                       </td>
-                      <td className="px-4 py-4 text-sm text-gray-800 text-right">
+                      <td className="px-4 py-4 text-sm text-slate-800 text-right">
                         {formatCurrency(result.purchaseCostBasis || 0)}
                       </td>
-                      <td className="px-4 py-4 text-sm text-gray-800 text-right">
+                      <td className="px-4 py-4 text-sm text-slate-800 text-right">
                         {formatCurrency(result.saleProceeds || 0)}
                       </td>
-                      <td className={`px-4 py-4 text-sm text-right font-medium ${(result.realizedPL || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                      <td className={`px-4 py-4 text-sm text-right font-semibold ${(result.realizedPL || 0) >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
                         {(result.realizedPL || 0) >= 0 ? '+' : ''}{formatCurrency(result.realizedPL || 0)}
                       </td>
-                      <td className={`px-4 py-4 text-sm text-right font-medium ${(result.realizedPLPercent || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                      <td className={`px-4 py-4 text-sm text-right font-semibold ${(result.realizedPLPercent || 0) >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
                         {formatPercent(result.realizedPLPercent || 0)}
                       </td>
                     </tr>
@@ -483,8 +475,7 @@ const FifoAnalysis = () => {
             </div>
           )}
         </div>
-      </div>
-    </div>
+    </SpotPageShell>
   );
 };
 

@@ -6,12 +6,17 @@ import axios from 'axios';
 import { useNavigate } from 'react-router-dom';
 import { usePortfolio } from '../../contexts/PortfolioContext';
 import { formatPortfolioCurrency } from '../../utils/currencyFormatter';
+import MarginPageShell from './MarginPageShell';
 
 const schema = yup.object().shape({
   symbol: yup.string().required('Это поле обязательно'),
   entryPrice: yup.number().required('Это поле обязательно').positive('Введите положительное число'),
   quantity: yup.number().required('Это поле обязательно').positive('Введите положительное число').integer('Введите целое число'),
   marginAmount: yup.number().required('Это поле обязательно').positive('Введите положительное число').max(100, 'Максимум 100%'),
+  leverage: yup.number().min(1, 'Минимум 1x').optional(),
+  borrowedAmount: yup.number().min(0, 'Не может быть отрицательной').optional(),
+  collateralAmount: yup.number().min(0, 'Не может быть отрицательной').optional(),
+  maintenanceMargin: yup.number().min(0, 'Не может быть отрицательной').max(100, 'Максимум 100%').optional(),
   notes: yup.string()
 });
 
@@ -28,6 +33,11 @@ function MarginTradeForm() {
       entryPrice: '',
       quantity: '',
       marginAmount: 10, // Значение по умолчанию 10%
+      leverage: 2,
+      borrowedAmount: '',
+      collateralAmount: '',
+      maintenanceMargin: 20,
+      financingRateType: 'FIXED',
       notes: ''
     }
   });
@@ -37,12 +47,35 @@ function MarginTradeForm() {
     ? Number(watchedValues.entryPrice) * Number(watchedValues.quantity) 
     : 0;
 
+  const leverage = watchedValues.leverage ? Number(watchedValues.leverage) : 0;
+  const manualBorrowed = watchedValues.borrowedAmount !== '' && watchedValues.borrowedAmount !== null
+    ? Number(watchedValues.borrowedAmount)
+    : null;
+  const manualCollateral = watchedValues.collateralAmount !== '' && watchedValues.collateralAmount !== null
+    ? Number(watchedValues.collateralAmount)
+    : null;
+
+  const computedBorrowed = manualBorrowed !== null
+    ? manualBorrowed
+    : leverage > 1
+      ? Math.max(totalCost - (totalCost / leverage), 0)
+      : totalCost;
+
+  const ownFunds = manualCollateral !== null
+    ? manualCollateral
+    : Math.max(totalCost - computedBorrowed, 0);
+
   const dailyInterest = totalCost && watchedValues.marginAmount
-    ? (totalCost * Number(watchedValues.marginAmount) / 100) / 365
+    ? (computedBorrowed * Number(watchedValues.marginAmount) / 100) / 365
     : 0;
 
   const monthlyInterest = dailyInterest * 30;
   const yearlyInterest = dailyInterest * 365;
+
+  const ltv = totalCost > 0 ? (computedBorrowed / totalCost) * 100 : 0;
+  const liquidationPrice = watchedValues.maintenanceMargin && watchedValues.quantity && Number(watchedValues.maintenanceMargin) < 100
+    ? computedBorrowed / (Number(watchedValues.quantity) * (1 - Number(watchedValues.maintenanceMargin) / 100))
+    : null;
 
   // Функция форматирования валюты
   const formatCurrency = (amount) => {
@@ -61,7 +94,12 @@ function MarginTradeForm() {
 
       const payload = {
         ...data,
-        entryDate: new Date().toISOString().split('T')[0]
+        entryDate: new Date().toISOString().split('T')[0],
+        borrowedAmount: computedBorrowed,
+        collateralAmount: ownFunds,
+        maintenanceMargin: data.maintenanceMargin,
+        financingRateType: data.financingRateType,
+        leverage: data.leverage
       };
 
       const response = await axios.post('/api/trades/buy', payload, {
@@ -102,32 +140,38 @@ function MarginTradeForm() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-white">
-      <div className="container-fluid p-4 max-w-4xl mx-auto">
-        {/* Header */}
-        <div className="mb-6">
-          <h3 className="text-2xl font-light text-gray-800 mb-2">Новая маржинальная сделка</h3>
-          <p className="text-gray-500">Создание позиции в портфеле {currentPortfolio?.name} ({currentPortfolio?.currency || 'RUB'})</p>
+    <MarginPageShell
+      title="Новая маржинальная сделка"
+      subtitle={`Создание позиции в портфеле ${currentPortfolio?.name || ''} (${currentPortfolio?.currency || 'RUB'})`}
+      badge="Margin"
+    >
+      <>
+      {error && (
+        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">
+          {error}
         </div>
+      )}
 
-        {error && (
-          <div className="bg-red-50/80 border border-red-200 text-red-700 px-4 py-3 rounded-lg mb-6 text-sm">
-            {error}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+        {/* Форма */}
+        <div className="bg-white/80 backdrop-blur-sm rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+          <div className="px-6 py-4 border-b border-gray-100/70">
+            <h4 className="text-lg font-semibold text-gray-900">Параметры сделки</h4>
           </div>
-        )}
-
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-          {/* Форма */}
-          <div className="bg-white/70 backdrop-blur-sm rounded-2xl shadow-sm border-0 overflow-hidden">
-            <div className="px-6 py-4 border-b border-gray-100/50">
-              <h4 className="text-lg font-medium text-gray-800">Параметры сделки</h4>
-            </div>
-            
-            <form onSubmit={handleSubmit(onSubmit)} className="px-6 py-6 space-y-6">
+          
+          <form onSubmit={handleSubmit(onSubmit)} className="px-6 py-6 space-y-6">
               {/* Тикер */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
+                <label className="flex items-center gap-2 text-sm font-medium text-gray-700 mb-2">
                   Тикер <span className="text-red-500">*</span>
+                  <button
+                    type="button"
+                    className="text-xs text-slate-500 bg-slate-100 px-2 py-0.5 rounded cursor-help"
+                    title="Биржевой тикер, латиница/цифры. Например: GAZP, SBER."
+                    aria-label="Подсказка по тикеру"
+                  >
+                    ?
+                  </button>
                 </label>
                 <input
                   {...register('symbol')}
@@ -143,8 +187,16 @@ function MarginTradeForm() {
               {/* Цена и количество */}
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                  <label className="flex items-center gap-2 text-sm font-medium text-gray-700 mb-2">
                     Цена входа <span className="text-red-500">*</span>
+                    <button
+                      type="button"
+                      className="text-xs text-slate-500 bg-slate-100 px-2 py-0.5 rounded cursor-help"
+                      title="Цена покупки за 1 акцию/лот в валюте портфеля."
+                      aria-label="Подсказка по цене входа"
+                    >
+                      ?
+                    </button>
                   </label>
                   <input
                     {...register('entryPrice')}
@@ -159,8 +211,16 @@ function MarginTradeForm() {
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                  <label className="flex items-center gap-2 text-sm font-medium text-gray-700 mb-2">
                     Количество <span className="text-red-500">*</span>
+                    <button
+                      type="button"
+                      className="text-xs text-slate-500 bg-slate-100 px-2 py-0.5 rounded cursor-help"
+                      title="Сколько акций/лотов покупаем. Только целые числа."
+                      aria-label="Подсказка по количеству"
+                    >
+                      ?
+                    </button>
                   </label>
                   <input
                     {...register('quantity')}
@@ -177,8 +237,16 @@ function MarginTradeForm() {
 
               {/* Ставка маржи */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
+                <label className="flex items-center gap-2 text-sm font-medium text-gray-700 mb-2">
                   Ставка маржи (% годовых) <span className="text-red-500">*</span>
+                  <button
+                    type="button"
+                    className="text-xs text-slate-500 bg-slate-100 px-2 py-0.5 rounded cursor-help"
+                    title="Процент за пользование заемом, годовых. Нужен для расчёта процентов."
+                    aria-label="Подсказка по ставке"
+                  >
+                    ?
+                  </button>
                 </label>
                 <div className="relative">
                   <input
@@ -197,6 +265,133 @@ function MarginTradeForm() {
                 {errors.marginAmount && (
                   <p className="mt-1 text-xs text-red-600">{errors.marginAmount.message}</p>
                 )}
+              </div>
+
+              {/* Тип ставки и поддерживающая маржа */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="flex items-center gap-2 text-sm font-medium text-gray-700 mb-2">
+                    Тип ставки
+                    <button
+                      type="button"
+                      className="text-xs text-slate-500 bg-slate-100 px-2 py-0.5 rounded cursor-help"
+                      title="Фиксированная или плавающая ставка по заемным средствам."
+                      aria-label="Подсказка по типу ставки"
+                    >
+                      ?
+                    </button>
+                  </label>
+                  <select
+                    {...register('financingRateType')}
+                    className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm bg-white/50 focus:ring-2 focus:ring-gray-200 focus:border-gray-300 transition-all"
+                  >
+                    <option value="FIXED">Фиксированная</option>
+                    <option value="FLOATING">Плавающая (ЦБ/брокер)</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="flex items-center gap-2 text-sm font-medium text-gray-700 mb-2">
+                    Поддерживающая маржа (%) <span className="text-red-500">*</span>
+                    <button
+                      type="button"
+                      className="text-xs text-slate-500 bg-slate-100 px-2 py-0.5 rounded cursor-help"
+                      title="Минимальный уровень обеспечения. Ниже — риск ликвидации."
+                      aria-label="Подсказка по поддерживающей марже"
+                    >
+                      ?
+                    </button>
+                  </label>
+                  <input
+                    {...register('maintenanceMargin')}
+                    type="number"
+                    step="0.1"
+                    min="0"
+                    max="100"
+                    placeholder="20"
+                    className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm bg-white/50 focus:ring-2 focus:ring-gray-200 focus:border-gray-300 transition-all"
+                  />
+                  {errors.maintenanceMargin && (
+                    <p className="mt-1 text-xs text-red-600">{errors.maintenanceMargin.message}</p>
+                  )}
+                </div>
+              </div>
+
+              {/* Плечо / заем / залог */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div>
+                  <label className="flex items-center gap-2 text-sm font-medium text-gray-700 mb-2">
+                    Плечо (x)
+                    <button
+                      type="button"
+                      className="text-xs text-slate-500 bg-slate-100 px-2 py-0.5 rounded cursor-help"
+                      title="Отношение позиции к своим средствам. 2x = 50% свои / 50% заем."
+                      aria-label="Подсказка по плечу"
+                    >
+                      ?
+                    </button>
+                  </label>
+                  <input
+                    {...register('leverage')}
+                    type="number"
+                    step="0.1"
+                    min="1"
+                    placeholder="2"
+                    className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm bg-white/50 focus:ring-2 focus:ring-gray-200 focus:border-gray-300 transition-all"
+                  />
+                  {errors.leverage && (
+                    <p className="mt-1 text-xs text-red-600">{errors.leverage.message}</p>
+                  )}
+                </div>
+
+                <div>
+                  <label className="flex items-center gap-2 text-sm font-medium text-gray-700 mb-2">
+                    Заёмные средства
+                    <button
+                      type="button"
+                      className="text-xs text-slate-500 bg-slate-100 px-2 py-0.5 rounded cursor-help"
+                      title="Сколько берем взаймы. Оставьте пустым — рассчитаем по плечу."
+                      aria-label="Подсказка по заемным"
+                    >
+                      ?
+                    </button>
+                  </label>
+                  <input
+                    {...register('borrowedAmount')}
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    placeholder="Авторасчёт"
+                    className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm bg-white/50 focus:ring-2 focus:ring-gray-200 focus:border-gray-300 transition-all"
+                  />
+                  {errors.borrowedAmount && (
+                    <p className="mt-1 text-xs text-red-600">{errors.borrowedAmount.message}</p>
+                  )}
+                </div>
+
+                <div>
+                  <label className="flex items-center gap-2 text-sm font-medium text-gray-700 mb-2">
+                    Собственные средства
+                    <button
+                      type="button"
+                      className="text-xs text-slate-500 bg-slate-100 px-2 py-0.5 rounded cursor-help"
+                      title="Ваши деньги в позиции. Пусто — рассчитаем автоматически."
+                      aria-label="Подсказка по собственным средствам"
+                    >
+                      ?
+                    </button>
+                  </label>
+                  <input
+                    {...register('collateralAmount')}
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    placeholder="Авторасчёт"
+                    className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm bg-white/50 focus:ring-2 focus:ring-gray-200 focus:border-gray-300 transition-all"
+                  />
+                  {errors.collateralAmount && (
+                    <p className="mt-1 text-xs text-red-600">{errors.collateralAmount.message}</p>
+                  )}
+                </div>
               </div>
 
               {/* Заметки */}
@@ -247,11 +442,37 @@ function MarginTradeForm() {
                     {formatCurrency(totalCost)}
                   </span>
                 </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-gray-600">Заёмные средства:</span>
+                  <span className="text-lg font-semibold text-gray-800">
+                    {formatCurrency(computedBorrowed)}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-gray-600">Собственные средства:</span>
+                  <span className="text-lg font-semibold text-gray-800">
+                    {formatCurrency(ownFunds)}
+                  </span>
+                </div>
                 
                 <div className="flex justify-between items-center">
                   <span className="text-gray-600">Ставка:</span>
                   <span className="text-purple-600 font-medium">
                     {watchedValues.marginAmount || 0}% годовых
+                  </span>
+                </div>
+
+                <div className="flex justify-between items-center">
+                  <span className="text-gray-600">LTV:</span>
+                  <span className="text-gray-800 font-medium">
+                    {ltv ? ltv.toFixed(1) : 0}%
+                  </span>
+                </div>
+
+                <div className="flex justify-between items-center">
+                  <span className="text-gray-600">Цена ликвидации (оценочно):</span>
+                  <span className="text-gray-800 font-medium">
+                    {liquidationPrice ? formatCurrency(liquidationPrice) : '—'}
                   </span>
                 </div>
               </div>
@@ -302,9 +523,9 @@ function MarginTradeForm() {
               </div>
             </div>
           </div>
-        </div>
       </div>
-    </div>
+      </>
+    </MarginPageShell>
   );
 }
 

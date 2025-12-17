@@ -1,240 +1,303 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
+import { usePortfolio } from '../contexts/PortfolioContext';
+import { getCurrencySymbol } from '../utils/currencyFormatter';
+import MarginPageShell from './margin/MarginPageShell';
 
 function StockPrices() {
-  const [stocks, setStocks] = useState([]);
+  const { currentPortfolio } = usePortfolio();
+  const ruTickers = useMemo(() => new Set([
+    'GAZP','ROSN','SBER','NVTK','GMKN','LKOH','SIBN','PLZL','PHOR','SNGS','TATN','NLMK','RUAL','CHMF','AKRN','VSMO',
+    'PIKK','ALRS','MTSS','MGNT','TCSG','MAGN','HYDR','IRKT','UNAC','IRAO','VTBR','RTKM','RASP','MOEX','BANE','SMLT',
+    'CBOM','NKNC','AFKS','SGZH','KZOS','MGTS','FEES','GCHE','NMTP','APTK','UPRO','FLOT','YAKG','FESH','MSNG','LSNG',
+    'AVAN','KAZT','VKCO','POSI','GLTR','VK','AGRO'
+  ]), []);
+  const [trades, setTrades] = useState([]);
   const [stockPrices, setStockPrices] = useState({});
   const [loading, setLoading] = useState(true);
+  const [loadingLive, setLoadingLive] = useState(false);
   const [error, setError] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
   const [savingStock, setSavingStock] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
 
-  // При загрузке компонента получаем список акций и сохраненные цены
-  useEffect(() => {
-    loadStocks();
-    loadSavedPrices();
-  }, []);
+  const currency = currentPortfolio?.currency || 'RUB';
+  const storageKey = useMemo(
+    () => (currentPortfolio?.id ? `stockPrices_${currentPortfolio.id}` : 'stockPrices'),
+    [currentPortfolio?.id]
+  );
+  const storageTsKey = useMemo(
+    () => (currentPortfolio?.id ? `stockPrices_last_${currentPortfolio.id}` : 'stockPrices_last'),
+    [currentPortfolio?.id]
+  );
 
-  // Очистка сообщения об успехе через 3 секунды
+  useEffect(() => {
+    loadTrades();
+    loadSavedPrices();
+  }, [currentPortfolio]);
+
+  // Автообновление при наличии сделок + каждые 60 минут
+  useEffect(() => {
+    if (stocks.length > 0) {
+      fetchLivePrices(true);
+    }
+    const interval = setInterval(() => fetchLivePrices(), 60 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, [trades]); // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => {
     if (successMessage) {
-      const timer = setTimeout(() => {
-        setSuccessMessage('');
-      }, 3000);
+      const timer = setTimeout(() => setSuccessMessage(''), 3000);
       return () => clearTimeout(timer);
     }
   }, [successMessage]);
 
-  // Загрузка списка всех акций из сделок
-  const loadStocks = async () => {
+  const loadTrades = async () => {
+    if (!currentPortfolio?.id) {
+      setTrades([]);
+      setLoading(false);
+      return;
+    }
     try {
       setLoading(true);
+      const resp = await axios.get('/api/trades', { headers: { 'X-Portfolio-ID': currentPortfolio.id } });
+      setTrades(Array.isArray(resp.data) ? resp.data : []);
       setError('');
-      
-      const response = await axios.get('/api/trades');
-      const trades = response.data;
-      
-      // Извлекаем все уникальные символы акций
-      const uniqueStocks = [...new Set(trades.map(trade => trade.symbol))];
-      
-      // Создаем массив объектов с информацией о каждой акции
-      const stocksData = uniqueStocks.map(symbol => {
-        const stockTrades = trades.filter(trade => trade.symbol === symbol);
-        const openTrades = stockTrades.filter(trade => !trade.exitDate);
-        const lastTrade = stockTrades.sort((a, b) => 
-          new Date(b.entryDate) - new Date(a.entryDate)
-        )[0];
-        
-        return {
-          symbol,
-          lastTradeDate: lastTrade?.entryDate,
-          openPositions: openTrades.length,
-          totalPositions: stockTrades.length,
-          lastPrice: lastTrade?.entryPrice,
-          tradeIds: openTrades.map(trade => trade.id)
-        };
-      });
-      
-      // Сортировка: сначала акции с открытыми позициями, затем по алфавиту
-      stocksData.sort((a, b) => {
-        if (a.openPositions > 0 && b.openPositions === 0) return -1;
-        if (a.openPositions === 0 && b.openPositions > 0) return 1;
-        return a.symbol.localeCompare(b.symbol);
-      });
-      
-      setStocks(stocksData);
     } catch (err) {
-      console.error('Error loading stocks:', err);
-      setError('Не удалось загрузить данные об акциях');
+      console.error('Error loading trades:', err);
+      setError('Не удалось загрузить сделки');
+      setTrades([]);
     } finally {
       setLoading(false);
     }
   };
 
-  // Загрузка сохраненных цен из localStorage
+  const stocks = useMemo(() => {
+    const map = {};
+    trades.forEach(trade => {
+      const sym = trade.symbol;
+      if (!map[sym]) {
+        map[sym] = { trades: [], open: 0 };
+      }
+      map[sym].trades.push(trade);
+      if (!trade.exitDate) map[sym].open += 1;
+    });
+    return Object.entries(map)
+      .map(([symbol, data]) => {
+        const sorted = [...data.trades].sort(
+          (a, b) => new Date(b.entryDate || b.createdAt || 0) - new Date(a.entryDate || a.createdAt || 0)
+        );
+        const lastTrade = sorted[0];
+        return {
+          symbol,
+          lastTradeDate: lastTrade?.entryDate || lastTrade?.createdAt,
+          openPositions: data.open,
+          totalPositions: data.trades.length,
+          lastPrice: lastTrade?.entryPrice,
+        };
+      })
+      .sort((a, b) => {
+        if (a.openPositions > 0 && b.openPositions === 0) return -1;
+        if (a.openPositions === 0 && b.openPositions > 0) return 1;
+        return a.symbol.localeCompare(b.symbol);
+      });
+  }, [trades]);
+
   const loadSavedPrices = () => {
     try {
-      const savedPrices = localStorage.getItem('stockPrices');
-      console.log('DEBUG: Saved stock prices:', savedPrices);
-      if (savedPrices) {
-        setStockPrices(JSON.parse(savedPrices));
-      }
+      const saved = localStorage.getItem(storageKey);
+      if (saved) setStockPrices(JSON.parse(saved));
     } catch (e) {
       console.error('Error loading saved prices:', e);
     }
   };
 
-  // Обновление цены акции в localStorage
   const updateStockPrice = (symbol, price) => {
-    const updatedPrices = {
-      ...stockPrices,
-      [symbol]: price ? parseFloat(price) : ''
-    };
-    
-    setStockPrices(updatedPrices);
-    
-    // Сохраняем в localStorage
-    try {
-      localStorage.setItem('stockPrices', JSON.stringify(updatedPrices));
-    } catch (e) {
-      console.error('Error saving prices to localStorage:', e);
-    }
+    const updated = { ...stockPrices, [symbol]: price ? parseFloat(price) : '' };
+    setStockPrices(updated);
+    localStorage.setItem(storageKey, JSON.stringify(updated));
   };
 
-  // Сохранение текущего курса как последней цены сделки
-  const saveAsLastPrice = async (stock) => {
+  const saveAsLastPrice = stock => {
     if (!stockPrices[stock.symbol] || isNaN(parseFloat(stockPrices[stock.symbol]))) {
-      setError(`Введите корректный курс для ${stock.symbol} перед сохранением`);
+      setError(`Введите корректный курс для ${stock.symbol}`);
       return;
     }
-
-    // Устанавливаем индикатор сохранения
     setSavingStock(stock.symbol);
-    setError('');
-
     try {
-      // Сохраняем курс только в localStorage
-      // Фактическая функциональность обновления цен в базе данных отключена из-за ошибок API
-      // В реальном приложении здесь был бы запрос к API
-      
-      // Сохраняем курс в localStorage (это уже сделано ранее при вводе)
-      // для надежности делаем еще раз
-      const updatedPrices = {
-        ...stockPrices,
-        [stock.symbol]: parseFloat(stockPrices[stock.symbol])
-      };
-      
-      localStorage.setItem('stockPrices', JSON.stringify(updatedPrices));
-      
-      // Показываем сообщение об успехе
-      if (stock.openPositions > 0) {
-        setSuccessMessage(`Курс для ${stock.symbol} успешно сохранен!`);
-      } else {
-        setSuccessMessage(`Курс для ${stock.symbol} сохранен (нет открытых позиций)`);
-      }
-      
-      // Небольшая задержка для лучшего взаимодействия
-      setTimeout(() => {
-        setSavingStock(null);
-      }, 500);
+      const updated = { ...stockPrices, [stock.symbol]: parseFloat(stockPrices[stock.symbol]) };
+      localStorage.setItem(storageKey, JSON.stringify(updated));
+      setSuccessMessage(`Курс для ${stock.symbol} сохранен`);
     } catch (err) {
       console.error('Error saving price:', err);
       setError(`Не удалось сохранить курс для ${stock.symbol}`);
+    } finally {
       setSavingStock(null);
     }
   };
 
-  // Функция для сброса курсов акций
   const resetStockPrices = () => {
-    try {
-      localStorage.removeItem('stockPrices');
-      setStockPrices({});
-      setSuccessMessage('Курсы акций сброшены');
-    } catch (e) {
-      console.error('Error resetting stock prices:', e);
-      setError('Не удалось сбросить курсы акций');
-    }
+    localStorage.removeItem(storageKey);
+    localStorage.removeItem(storageTsKey);
+    setStockPrices({});
+    setSuccessMessage('Курсы сброшены');
   };
 
-  // Функция для инициализации курсов акций значениями по умолчанию
   const initializeDefaultPrices = () => {
-    try {
-      // Создаем объект с ценами всех акций равными их последним ценам сделок
-      const defaultPrices = {};
-      stocks.forEach(stock => {
-        if (stock.lastPrice && stock.openPositions > 0) {
-          defaultPrices[stock.symbol] = parseFloat(stock.lastPrice);
-        }
-      });
+    const defaults = {};
+    stocks.forEach(s => {
+      if (s.lastPrice) defaults[s.symbol] = parseFloat(s.lastPrice);
+    });
+    localStorage.setItem(storageKey, JSON.stringify(defaults));
+    setStockPrices(defaults);
+    setSuccessMessage('Курсы инициализированы последними ценами сделок');
+  };
 
-      // Сохраняем в localStorage
-      localStorage.setItem('stockPrices', JSON.stringify(defaultPrices));
-      setStockPrices(defaultPrices);
-      setSuccessMessage('Курсы акций инициализированы значениями по умолчанию');
+  const fetchLivePrices = async (force = false) => {
+    if (!currentPortfolio) return;
+    const tickers = stocks.map(s => s.symbol);
+    if (tickers.length === 0) return;
+
+    const now = Date.now();
+    const lastTsRaw = localStorage.getItem(storageTsKey);
+    const allHavePrices = tickers.every(t => stockPrices[t]);
+    if (!force && lastTsRaw && allHavePrices) {
+      const lastTs = parseInt(lastTsRaw, 10);
+      if (!isNaN(lastTs) && now - lastTs < 10 * 60 * 1000) {
+        setSuccessMessage('Котировки уже обновлялись менее 10 минут назад');
+        return;
+      }
+    }
+
+    setLoadingLive(true);
+    try {
+      const updated = { ...stockPrices };
+
+      await Promise.all(
+        tickers.map(async ticker => {
+          if (!/^[A-Z]{1,6}$/.test(ticker)) {
+            return;
+          }
+          if (['USD','EUR','USDT','BTC','BTCUSD'].includes(ticker)) {
+            return;
+          }
+          // MOEX c таймаутом (только для российских тикеров)
+          if (ruTickers.has(ticker)) {
+            try {
+              const moex = await axios.get('/api/prices/moex', { params: { ticker }, timeout: 10000 });
+              if (moex.data?.price) {
+                updated[ticker] = moex.data.price;
+                return;
+              }
+            } catch (e) {
+              // fallback to alpha
+            }
+          }
+          try {
+            const alpha = await axios.get('/api/prices/alpha', { params: { ticker }, timeout: 10000 });
+            if (alpha.data?.price) {
+              updated[ticker] = alpha.data.price;
+            }
+          } catch (e) {
+            // ignore
+          }
+        })
+      );
+      setStockPrices(updated);
+      localStorage.setItem(storageKey, JSON.stringify(updated));
+      localStorage.setItem(storageTsKey, String(now));
+      setSuccessMessage('Котировки обновлены');
     } catch (e) {
-      console.error('Error initializing default prices:', e);
-      setError('Не удалось инициализировать курсы акций');
+      setError('Не удалось обновить котировки');
+    } finally {
+      setLoadingLive(false);
     }
   };
 
-  // Фильтрация акций по поисковому запросу
-  const filteredStocks = stocks.filter(stock => 
-    stock.symbol.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const filteredStocks = stocks.filter(s => s.symbol.toLowerCase().includes(searchQuery.toLowerCase()));
 
   if (loading) {
     return (
-      <div className="flex justify-center items-center h-64">
-        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-gray-400 border-r-2 border-b-2 border-transparent"></div>
-      </div>
+      <MarginPageShell title="Курсы акций" subtitle="Загрузка цен..." badge="Prices">
+        <div className="flex justify-center items-center py-12">
+          <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-gray-300"></div>
+        </div>
+      </MarginPageShell>
+    );
+  }
+
+  if (!currentPortfolio) {
+    return (
+      <MarginPageShell title="Курсы акций" subtitle="Портфель не выбран" badge="Prices">
+        <div className="text-center space-y-3 py-12 text-slate-600">
+          <p>Выберите портфель, чтобы управлять котировками.</p>
+          <button
+            className="px-4 py-2 rounded-xl bg-slate-900 text-white hover:bg-slate-800 transition"
+            onClick={() => (window.location.href = '/portfolios')}
+          >
+            К портфелям
+          </button>
+        </div>
+      </MarginPageShell>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <div className="p-6 max-w-6xl mx-auto">
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-8 gap-4">
-          <h1 className="text-2xl font-medium text-gray-900">Курсы акций</h1>
-          
-          <div className="flex gap-3 items-center">
-            <button 
-              onClick={resetStockPrices}
-              className="px-3 py-2 text-sm text-gray-600 bg-white border border-gray-300 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-1 focus:ring-gray-400"
-            >
-              Сбросить курсы
-            </button>
-            <button 
-              onClick={initializeDefaultPrices}
-              className="px-3 py-2 text-sm text-gray-600 bg-white border border-gray-300 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-1 focus:ring-gray-400"
-            >
-              Инициализировать
-            </button>
-            <div className="relative w-full sm:w-64">
-              <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                <svg className="h-4 w-4 text-gray-400" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
-                  <path fillRule="evenodd" d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z" clipRule="evenodd" />
-                </svg>
-              </div>
-              <input
-                type="text"
-                placeholder="Поиск акций..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-md text-sm text-gray-900 placeholder-gray-400 focus:ring-1 focus:ring-gray-400 focus:border-gray-400"
-              />
+    <MarginPageShell
+      title="Курсы акций"
+      subtitle="Автообновление по MOEX / Alpha Vantage"
+      badge="Prices"
+      actions={
+        <div className="flex gap-2 flex-wrap items-center">
+          <button
+            onClick={() => fetchLivePrices(true)}
+            disabled={loadingLive}
+            className="px-3 py-2 text-sm text-white bg-slate-900 border border-slate-900 rounded-md hover:bg-slate-800 disabled:bg-slate-500"
+          >
+            {loadingLive ? 'Обновление...' : 'Обновить котировки'}
+          </button>
+          <button
+            onClick={resetStockPrices}
+            className="px-3 py-2 text-sm text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
+          >
+            Сбросить
+          </button>
+          <button
+            onClick={initializeDefaultPrices}
+            className="px-3 py-2 text-sm text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
+          >
+            Инициализировать
+          </button>
+          <div className="relative w-full sm:w-64">
+            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+              <svg
+                className="h-4 w-4 text-gray-400"
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 20 20"
+                fill="currentColor"
+              >
+                <path
+                  fillRule="evenodd"
+                  d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z"
+                  clipRule="evenodd"
+                />
+              </svg>
             </div>
+            <input
+              type="text"
+              placeholder="Поиск тикера..."
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              className="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-md text-sm"
+            />
           </div>
         </div>
-
-        {error && (
-          <div className="mb-6 p-4 bg-red-50 border border-red-200 text-red-700 rounded-lg text-sm">
-            {error}
-          </div>
-        )}
-
+      }
+    >
+      <>
+        {error && <div className="mb-6 p-4 bg-red-50 border border-red-200 text-red-700 rounded-lg text-sm">{error}</div>}
         {successMessage && (
           <div className="mb-6 p-4 bg-green-50 border border-green-200 text-green-700 rounded-lg text-sm">
             {successMessage}
@@ -246,96 +309,58 @@ function StockPrices() {
             <table className="min-w-full divide-y divide-gray-200">
               <thead className="bg-gray-50">
                 <tr>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Акция
-                  </th>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Открытые<br/>позиции
-                  </th>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Всего<br/>сделок
-                  </th>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Последняя<br/>цена
-                  </th>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Последняя<br/>сделка
-                  </th>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Текущий<br/>курс
-                  </th>
-                  <th scope="col" className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Действия
-                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Тикер</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Открытые</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Всего</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Последняя цена</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Последняя сделка</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Текущий курс</th>
+                  <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Действия</th>
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
-                {filteredStocks.map((stock) => (
+                {filteredStocks.map(stock => (
                   <tr key={stock.symbol} className={stock.openPositions > 0 ? 'bg-blue-50' : ''}>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="font-medium text-gray-900">{stock.symbol}</div>
+                    <td className="px-6 py-4 whitespace-nowrap font-medium text-gray-900">{stock.symbol}</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">{stock.openPositions}</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{stock.totalPositions}</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      {stock.lastPrice ? `${getCurrencySymbol(currency)}${Number(stock.lastPrice).toFixed(2)}` : '—'}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className={`text-sm ${stock.openPositions > 0 ? 'font-medium text-blue-700' : 'text-gray-500'}`}>
-                        {stock.openPositions}
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm text-gray-500">{stock.totalPositions}</div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm text-gray-500">
-                        {Number(stock.lastPrice).toLocaleString('ru-RU', { style: 'currency', currency: 'RUB' })}
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm text-gray-500">
-                        {stock.lastTradeDate 
-                          ? format(new Date(stock.lastTradeDate), 'd MMM yyyy', { locale: ru })
-                          : '—'
-                        }
-                      </div>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      {stock.lastTradeDate ? format(new Date(stock.lastTradeDate), 'd MMM yyyy', { locale: ru }) : '—'}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="relative rounded-md w-32">
                         <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                          <span className="text-gray-500 text-sm">₽</span>
+                          <span className="text-gray-500 text-sm">{getCurrencySymbol(currency)}</span>
                         </div>
                         <input
                           type="number"
                           min="0"
                           step="0.01"
                           value={stockPrices[stock.symbol] || ''}
-                          onChange={(e) => updateStockPrice(stock.symbol, e.target.value)}
-                          className="w-full pl-7 pr-3 py-2 text-sm border border-gray-300 rounded-md focus:ring-1 focus:ring-gray-400 focus:border-gray-400"
+                          onChange={e => updateStockPrice(stock.symbol, e.target.value)}
+                          className="w-full pl-7 pr-3 py-2 text-sm border border-gray-300 rounded-md focus:ring-1 focus:ring-gray-400"
                           placeholder="0.00"
                         />
                       </div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-center">
-                      {stock.openPositions > 0 && (
-                        <button
-                          onClick={() => saveAsLastPrice(stock)}
-                          disabled={savingStock === stock.symbol || !stockPrices[stock.symbol]}
-                          className="px-3 py-2 text-sm text-white bg-gray-700 border border-gray-700 rounded-md hover:bg-gray-800 disabled:bg-gray-400 disabled:cursor-not-allowed focus:outline-none focus:ring-1 focus:ring-gray-400"
-                        >
-                          {savingStock === stock.symbol ? (
-                            <span className="flex items-center">
-                              <span className="w-3 h-3 mr-2 rounded-full border-2 border-t-transparent border-white animate-spin"></span>
-                              Сохранение...
-                            </span>
-                          ) : (
-                            'Сохранить'
-                          )}
-                        </button>
-                      )}
+                      <button
+                        onClick={() => saveAsLastPrice(stock)}
+                        disabled={savingStock === stock.symbol || !stockPrices[stock.symbol]}
+                        className="px-3 py-2 text-sm text-white bg-gray-700 border border-gray-700 rounded-md hover:bg-gray-800 disabled:bg-gray-400 disabled:cursor-not-allowed"
+                      >
+                        {savingStock === stock.symbol ? 'Сохранение...' : 'Сохранить'}
+                      </button>
                     </td>
                   </tr>
                 ))}
                 {filteredStocks.length === 0 && (
                   <tr>
                     <td colSpan="7" className="px-6 py-8 text-center text-sm text-gray-500">
-                      {searchQuery ? 'Акции с таким названием не найдены' : 'Нет доступных акций'}
+                      {searchQuery ? 'Тикер не найден' : 'Нет сделок'}
                     </td>
                   </tr>
                 )}
@@ -343,9 +368,9 @@ function StockPrices() {
             </table>
           </div>
         </div>
-      </div>
-    </div>
+      </>
+    </MarginPageShell>
   );
 }
 
-export default StockPrices; 
+export default StockPrices;

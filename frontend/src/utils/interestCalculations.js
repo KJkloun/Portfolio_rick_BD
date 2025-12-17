@@ -13,6 +13,7 @@ export const calculateAccumulatedInterest = (trade, rateChanges = []) => {
   // Для закрытых сделок используем exitDate, для открытых - сегодняшнюю дату
   const endDate = trade.exitDate ? new Date(trade.exitDate) : new Date();
   const totalCost = Number(trade.entryPrice) * Number(trade.quantity);
+  const principal = trade.borrowedAmount != null ? Number(trade.borrowedAmount) : totalCost;
   
   // Получаем изменения ставок, которые применяются к этой сделке
   const applicableChanges = rateChanges
@@ -30,7 +31,7 @@ export const calculateAccumulatedInterest = (trade, rateChanges = []) => {
     const periodDays = differenceInDays(firstPeriodEnd, currentDate);
     if (periodDays > 0) {
       const dailyRate = Number(trade.marginAmount) / 100 / 365;
-      const periodInterest = totalCost * dailyRate * periodDays;
+      const periodInterest = principal * dailyRate * periodDays;
       totalInterest += periodInterest;
     }
     currentDate = firstPeriodEnd;
@@ -51,7 +52,7 @@ export const calculateAccumulatedInterest = (trade, rateChanges = []) => {
       const periodDays = differenceInDays(periodEnd, periodStart);
       if (periodDays > 0) {
         const dailyRate = change.rate / 100 / 365;
-        const periodInterest = totalCost * dailyRate * periodDays;
+        const periodInterest = principal * dailyRate * periodDays;
         totalInterest += periodInterest;
       }
     }
@@ -89,6 +90,7 @@ export const calculateSavingsFromRateChanges = (trade, rateChanges = []) => {
   // Для закрытых сделок используем exitDate, для открытых - сегодняшнюю дату
   const endDate = trade.exitDate ? new Date(trade.exitDate) : new Date();
   const totalCost = Number(trade.entryPrice) * Number(trade.quantity);
+  const principal = trade.borrowedAmount != null ? Number(trade.borrowedAmount) : totalCost;
   const originalRate = Number(trade.marginAmount);
   const daysHeld = differenceInDays(endDate, entryDate);
   
@@ -102,9 +104,33 @@ export const calculateSavingsFromRateChanges = (trade, rateChanges = []) => {
   const currentRate = applicableChanges[0].rate;
   
   if (currentRate >= originalRate) return 0;
-  
-  const originalDailyInterest = totalCost * originalRate / 100 / 365;
-  const currentDailyInterest = totalCost * currentRate / 100 / 365;
+
+  const originalDailyInterest = principal * originalRate / 100 / 365;
+  const currentDailyInterest = principal * currentRate / 100 / 365;
   
   return (originalDailyInterest - currentDailyInterest) * daysHeld;
-}; 
+};
+
+/**
+ * Получить актуальную ставку для сделки на указанную дату
+ * @param {Object} trade - сделка (entryDate, marginAmount)
+ * @param {Date} date - дата, для которой нужна ставка (обычно сегодня)
+ * @param {Array} rateChanges - массив изменений ставок ЦБ РФ {date, rate}
+ * @returns {number} - ставка в процентах
+ */
+export const getRateForDate = (trade, date = new Date(), rateChanges = []) => {
+  if (!trade?.entryDate) return Number(trade?.marginAmount || 0);
+  const entryDate = new Date(trade.entryDate);
+  // если дата до открытия сделки — базовая ставка сделки
+  if (date < entryDate) return Number(trade.marginAmount || 0);
+
+  const applicable = rateChanges
+    .filter(r => {
+      const d = new Date(r.date);
+      return d <= date && d >= entryDate;
+    })
+    .sort((a, b) => new Date(b.date) - new Date(a.date));
+
+  if (applicable.length > 0) return Number(applicable[0].rate || trade.marginAmount || 0);
+  return Number(trade.marginAmount || 0);
+};

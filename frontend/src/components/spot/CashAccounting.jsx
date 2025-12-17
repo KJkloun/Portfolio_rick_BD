@@ -4,6 +4,7 @@ import { usePortfolio } from '../../contexts/PortfolioContext';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import { formatPortfolioCurrency } from '../../utils/currencyFormatter';
+import SpotPageShell from './SpotPageShell';
 
 function CashAccounting() {
   const { currentPortfolio, refreshTrigger } = usePortfolio();
@@ -109,11 +110,6 @@ function CashAccounting() {
   const cashFlows = calculateCashFlows();
   const currentBalance = cashFlows.length > 0 ? cashFlows[0].runningBalance : 0;
   
-  // Save to localStorage for Daily Summary
-  if (currentPortfolio?.id) {
-    localStorage.setItem(`cashBalance_${currentPortfolio.id}`, JSON.stringify({ balance: currentBalance }));
-  }
-  
   const totalInflows = cashFlows
     .filter(cf => cf.type === 'inflow')
     .reduce((sum, cf) => sum + cf.amount, 0);
@@ -131,28 +127,29 @@ function CashAccounting() {
   const getTypeConfig = (type) => {
     switch (type) {
       case 'inflow':
-        return { color: 'text-green-600', icon: '⬆️', label: 'Поступление' };
+        return { color: 'text-green-600', label: 'Поступление' };
       case 'outflow':
-        return { color: 'text-red-600', icon: '⬇️', label: 'Списание' };
+        return { color: 'text-red-600', label: 'Списание' };
       default:
-        return { color: 'text-gray-600', icon: '➡️', label: 'Операция' };
+        return { color: 'text-gray-600', label: 'Операция' };
     }
   };
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-gray-50 to-white flex items-center justify-center">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-300"></div>
-      </div>
+      <SpotPageShell title="Учёт наличных" subtitle="Загрузка данных..." badge="Spot портфель">
+        <div className="flex items-center justify-center py-24">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-slate-800"></div>
+        </div>
+      </SpotPageShell>
     );
   }
 
   if (error) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-gray-50 to-white flex items-center justify-center">
-        <div className="text-center">
-          <div className="text-red-500 mb-4">⚠️</div>
-          <p className="text-gray-700 mb-4">{error}</p>
+      <SpotPageShell title="Учёт наличных" subtitle="Полная статистика" badge="Spot портфель">
+        <div className="text-center space-y-3 py-16">
+          <p className="text-gray-700">{error}</p>
           <button
             onClick={() => window.location.href = '/'}
             className="bg-gray-800 text-white px-4 py-2 rounded-lg hover:bg-gray-700 transition-colors"
@@ -160,16 +157,15 @@ function CashAccounting() {
             Выбрать портфель
           </button>
         </div>
-      </div>
+      </SpotPageShell>
     );
   }
 
   if (!currentPortfolio) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-gray-50 to-white flex items-center justify-center">
-        <div className="text-center">
-          <div className="text-gray-400 mb-4">💰</div>
-          <p className="text-gray-700 mb-4">Портфель не выбран</p>
+      <SpotPageShell title="Учёт наличных" subtitle="Движение денежных средств" badge="Spot портфель">
+        <div className="text-center space-y-3 py-16">
+          <p className="text-gray-700">Портфель не выбран</p>
           <button
             onClick={() => window.location.href = '/'}
             className="bg-gray-800 text-white px-4 py-2 rounded-lg hover:bg-gray-700 transition-colors"
@@ -177,114 +173,72 @@ function CashAccounting() {
             Выбрать портфель
           </button>
         </div>
-      </div>
+      </SpotPageShell>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-white">
-      <div className="container-fluid p-4 max-w-7xl mx-auto">
-        {/* Header */}
-        <div className="mb-6">
-          <h3 className="text-2xl font-light text-gray-800 mb-2">Учёт наличных</h3>
-          <p className="text-gray-500">Движение денежных средств в портфеле ({currentPortfolio?.currency || 'USD'})</p>
-        </div>
+    <SpotPageShell
+      title="Учёт наличных"
+      subtitle={`Движение денежных средств в портфеле (${currentPortfolio?.currency || 'USD'})`}
+      badge="Spot портфель"
+    >
 
         {/* Current Balance - Featured Card */}
         <div className="mb-6">
-          <div className="bg-white/70 backdrop-blur-sm rounded-2xl shadow-sm border-0 overflow-hidden">
+          <div className="bg-white/80 backdrop-blur-sm rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
             <div className="px-8 py-6 text-center">
-              <div className="text-sm font-medium text-gray-400 mb-2">Текущий баланс наличных</div>
-              <div className={`text-4xl font-light ${
-                currentBalance >= 0 ? 'text-green-500' : 'text-red-500'
-              }`}>
+              <div className="text-sm font-medium text-slate-500 mb-2">Текущий баланс наличных</div>
+              <div className={`text-4xl font-light ${currentBalance >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
                 {formatCurrency(currentBalance)}
               </div>
-              <div className="text-xs text-gray-400 mt-2">доступно для инвестирования</div>
+              <div className="text-xs text-slate-400 mt-2">доступно для инвестирования</div>
             </div>
           </div>
         </div>
 
         {/* Summary Stats */}
         <div className="mb-6 grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div className="bg-white/70 backdrop-blur-sm rounded-2xl shadow-sm border-0 overflow-hidden">
-            <div className="px-6 py-4 text-center">
-              <div className="text-2xl font-light text-green-500">
-                {formatCurrency(totalInflows)}
-              </div>
-              <div className="text-xs text-gray-400">всего поступлений</div>
-            </div>
-          </div>
-          
-          <div className="bg-white/70 backdrop-blur-sm rounded-2xl shadow-sm border-0 overflow-hidden">
-            <div className="px-6 py-4 text-center">
-              <div className="text-2xl font-light text-red-500">
-                {formatCurrency(totalOutflows)}
-              </div>
-              <div className="text-xs text-gray-400">всего списаний</div>
-            </div>
-          </div>
-          
-          <div className="bg-white/70 backdrop-blur-sm rounded-2xl shadow-sm border-0 overflow-hidden">
-            <div className="px-6 py-4 text-center">
-              <div className={`text-2xl font-light ${netCashFlow >= 0 ? 'text-green-500' : 'text-red-500'}`}>
-                {formatCurrency(netCashFlow)}
-              </div>
-              <div className="text-xs text-gray-400">чистый денежный поток</div>
-            </div>
-          </div>
+          <Metric label="Всего поступлений" value={formatCurrency(totalInflows)} tone="emerald" />
+          <Metric label="Всего списаний" value={formatCurrency(totalOutflows)} tone="rose" />
+          <Metric label="Чистый поток" value={formatCurrency(netCashFlow)} tone={netCashFlow>=0?'emerald':'rose'} />
         </div>
 
         {/* Cash Flow Table */}
-        <div className="bg-white/70 backdrop-blur-sm rounded-2xl shadow-sm border-0 overflow-hidden">
-          <div className="px-6 py-4">
-            <h6 className="text-lg font-medium text-gray-700 mb-1">История движения средств</h6>
-            <p className="text-sm text-gray-400">Детальный анализ всех денежных операций</p>
+        <div className="bg-white/80 backdrop-blur-sm rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+          <div className="px-6 py-4 border-b border-slate-100">
+            <h6 className="text-lg font-semibold text-slate-900 mb-1">История движения средств</h6>
+            <p className="text-sm text-slate-500">Детальный анализ всех денежных операций</p>
           </div>
           
           {cashFlows.length > 0 ? (
             <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead>
-                  <tr className="border-b border-gray-100">
-                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500">Дата</th>
-                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500">Тип</th>
-                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500">Описание</th>
-                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-500">Сумма</th>
-                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-500">Баланс</th>
-                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500">Примечание</th>
+              <table className="w-full spot-table">
+                <thead className="bg-slate-50">
+                  <tr className="border-b border-slate-100">
+                    <Th>Дата</Th>
+                    <Th>Тип</Th>
+                    <Th>Описание</Th>
+                    <Th align="right">Сумма</Th>
+                    <Th align="right">Баланс</Th>
+                    <Th>Примечание</Th>
                   </tr>
                 </thead>
                 <tbody>
                   {cashFlows.map((flow, index) => {
                     const typeConfig = getTypeConfig(flow.type);
                     return (
-                      <tr key={index} className="border-b border-gray-50 hover:bg-gray-50/50 transition-colors">
-                        <td className="px-4 py-4 text-sm text-gray-800">
-                          {flow.tradeDate ? format(new Date(flow.tradeDate), 'dd.MM.yyyy', { locale: ru }) : '-'}
-                        </td>
-                        <td className="px-4 py-4 text-sm">
-                          <div className="flex items-center space-x-2">
-                            <span className="text-sm">{typeConfig.icon}</span>
-                            <span className={`text-sm font-medium ${typeConfig.color}`}>
-                              {typeConfig.label}
-                            </span>
-                          </div>
-                        </td>
-                        <td className="px-4 py-4 text-sm text-gray-800">
-                          {flow.description}
-                        </td>
-                        <td className={`px-4 py-4 text-sm text-right font-medium ${typeConfig.color}`}>
+                      <tr key={index} className="border-b border-slate-50 hover:bg-slate-50/60 transition-colors">
+                        <Td>{flow.tradeDate ? format(new Date(flow.tradeDate), 'dd.MM.yyyy', { locale: ru }) : '-'}</Td>
+                        <Td className={`font-semibold ${typeConfig.color}`}>{typeConfig.label}</Td>
+                        <Td>{flow.description}</Td>
+                        <Td align="right" className={typeConfig.color}>
                           {flow.amount >= 0 ? '+' : ''}{formatCurrency(flow.amount)}
-                        </td>
-                        <td className={`px-4 py-4 text-sm text-right font-medium ${
-                          flow.runningBalance >= 0 ? 'text-gray-800' : 'text-red-600'
-                        }`}>
+                        </Td>
+                        <Td align="right" className={flow.runningBalance >= 0 ? 'text-slate-800' : 'text-rose-600'}>
                           {formatCurrency(flow.runningBalance)}
-                        </td>
-                        <td className="px-4 py-4 text-sm text-gray-500">
-                          {flow.note || '-'}
-                        </td>
+                        </Td>
+                        <Td className="text-slate-500">{flow.note || '-'}</Td>
                       </tr>
                     );
                   })}
@@ -303,9 +257,41 @@ function CashAccounting() {
             </div>
           )}
         </div>
-      </div>
-    </div>
+    </SpotPageShell>
   );
 }
 
 export default CashAccounting;
+
+function Metric({ label, value, tone = 'slate' }) {
+  const tones = {
+    slate: 'bg-slate-50 text-slate-700',
+    emerald: 'bg-emerald-50 text-emerald-700',
+    rose: 'bg-rose-50 text-rose-700',
+  };
+  const toneClass = tones[tone] || tones.slate;
+  return (
+    <div className="bg-white/80 backdrop-blur-sm rounded-2xl shadow-sm border border-slate-100 p-4">
+      <div className={`inline-flex px-3 py-1 rounded-full text-xs font-semibold ${toneClass}`}>{label}</div>
+      <div className="mt-3 text-2xl number-unified">{value}</div>
+    </div>
+  );
+}
+
+function Th({ children, align = 'left' }) {
+  const alignClass = align === 'right' ? 'text-right' : 'text-left';
+  return (
+    <th className={`px-4 py-3 text-xs font-medium uppercase tracking-wide text-slate-500 ${alignClass}`}>
+      {children}
+    </th>
+  );
+}
+
+function Td({ children, align = 'left', className = '' }) {
+  const alignClass = align === 'right' ? 'text-right' : 'text-left';
+  return (
+    <td className={`px-4 py-4 text-sm text-slate-800 ${alignClass} ${className}`}>
+      {children}
+    </td>
+  );
+}

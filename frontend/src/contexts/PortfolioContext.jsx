@@ -120,6 +120,12 @@ export const PortfolioProvider = ({ children }) => {
     setCurrentPortfolio(portfolio);
     if (portfolio) {
       localStorage.setItem('currentPortfolioId', portfolio.id.toString());
+      if (portfolio.type === 'SPOT') {
+        localStorage.setItem('currentSpotPortfolioId', portfolio.id.toString());
+      }
+      if (portfolio.type === 'MARGIN') {
+        localStorage.setItem('currentMarginPortfolioId', portfolio.id.toString());
+      }
     } else {
       localStorage.removeItem('currentPortfolioId');
     }

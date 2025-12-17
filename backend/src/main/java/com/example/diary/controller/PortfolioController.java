@@ -2,17 +2,18 @@ package com.example.diary.controller;
 
 import com.example.diary.model.Portfolio;
 import com.example.diary.model.User;
-import com.example.diary.security.JwtUtil;
 import com.example.diary.service.PortfolioService;
 import com.example.diary.service.UserService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
+
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 
 @RestController
 @RequestMapping("/portfolios")
@@ -24,14 +25,11 @@ public class PortfolioController {
     
     @Autowired
     private UserService userService;
-    
-    @Autowired
-    private JwtUtil jwtUtil;
-    
+
     @PostMapping
-    public ResponseEntity<?> createPortfolio(@RequestBody CreatePortfolioRequest request, @RequestHeader("Authorization") String authHeader) {
+    public ResponseEntity<?> createPortfolio(@RequestBody CreatePortfolioRequest request) {
         try {
-            User user = getUserFromToken(authHeader);
+            User user = getAuthenticatedUser();
             
             Portfolio portfolio = portfolioService.createPortfolio(
                 request.getName(),
@@ -50,9 +48,9 @@ public class PortfolioController {
     }
     
     @GetMapping
-    public ResponseEntity<?> getUserPortfolios(@RequestHeader("Authorization") String authHeader) {
+    public ResponseEntity<?> getUserPortfolios() {
         try {
-            User user = getUserFromToken(authHeader);
+            User user = getAuthenticatedUser();
             List<Portfolio> portfolios = portfolioService.getUserPortfolios(user);
             
             return ResponseEntity.ok(portfolios.stream()
@@ -66,9 +64,9 @@ public class PortfolioController {
     }
     
     @GetMapping("/type/{type}")
-    public ResponseEntity<?> getUserPortfoliosByType(@PathVariable String type, @RequestHeader("Authorization") String authHeader) {
+    public ResponseEntity<?> getUserPortfoliosByType(@PathVariable String type) {
         try {
-            User user = getUserFromToken(authHeader);
+            User user = getAuthenticatedUser();
             Portfolio.PortfolioType portfolioType = Portfolio.PortfolioType.valueOf(type.toUpperCase());
             List<Portfolio> portfolios = portfolioService.getUserPortfoliosByType(user, portfolioType);
             
@@ -83,9 +81,9 @@ public class PortfolioController {
     }
     
     @PutMapping("/{id}")
-    public ResponseEntity<?> updatePortfolio(@PathVariable Long id, @RequestBody UpdatePortfolioRequest request, @RequestHeader("Authorization") String authHeader) {
+    public ResponseEntity<?> updatePortfolio(@PathVariable Long id, @RequestBody UpdatePortfolioRequest request) {
         try {
-            User user = getUserFromToken(authHeader);
+            User user = getAuthenticatedUser();
             Portfolio portfolio = portfolioService.updatePortfolio(id, request.getName(), request.getCurrency(), request.getDescription(), user);
             
             return ResponseEntity.ok(createPortfolioResponse(portfolio));
@@ -97,9 +95,9 @@ public class PortfolioController {
     }
     
     @DeleteMapping("/{id}")
-    public ResponseEntity<?> deactivatePortfolio(@PathVariable Long id, @RequestHeader("Authorization") String authHeader) {
+    public ResponseEntity<?> deactivatePortfolio(@PathVariable Long id) {
         try {
-            User user = getUserFromToken(authHeader);
+            User user = getAuthenticatedUser();
             portfolioService.deactivatePortfolio(id, user);
             
             Map<String, String> response = new HashMap<>();
@@ -112,14 +110,14 @@ public class PortfolioController {
         }
     }
     
-    private User getUserFromToken(String authHeader) {
-        String token = authHeader.replace("Bearer ", "");
-        String username = jwtUtil.extractUsername(token);
-        Optional<User> userOpt = userService.findByUsername(username);
-        if (userOpt.isEmpty()) {
-            throw new RuntimeException("Пользователь не найден");
+    private User getAuthenticatedUser() {
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication == null || !authentication.isAuthenticated()) {
+            throw new RuntimeException("Пользователь не авторизован");
         }
-        return userOpt.get();
+        String username = authentication.getName();
+        return userService.findByUsername(username)
+                .orElseThrow(() -> new RuntimeException("Пользователь не найден"));
     }
     
     private Map<String, Object> createPortfolioResponse(Portfolio portfolio) {

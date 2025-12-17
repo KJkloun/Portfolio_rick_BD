@@ -2,6 +2,14 @@
 import { differenceInDays, format } from 'date-fns';
 import { ru } from 'date-fns/locale';
 
+const getPrincipal = (trade) => {
+  if (!trade) return 0;
+  if (trade.borrowedAmount != null) return Number(trade.borrowedAmount);
+  if (trade.totalCost != null) return Number(trade.totalCost);
+  if (trade.entryPrice && trade.quantity) return Number(trade.entryPrice) * Number(trade.quantity);
+  return 0;
+};
+
 // Helper to get applicable rate for a trade on given date considering CB changes
 export function getRateForDate(trade, date, rateChanges = []) {
   const tradeDate = new Date(trade.entryDate);
@@ -37,6 +45,7 @@ export function calculateTradeDetails(trade, rateChanges = []) {
   const entryDate = new Date(trade.entryDate);
   const today = trade.exitDate ? new Date(trade.exitDate) : new Date();
   const daysHeld = differenceInDays(today, entryDate);
+  const principal = getPrincipal(trade);
 
   // Build periods based on rate changes
   const periods = [];
@@ -52,7 +61,7 @@ export function calculateTradeDetails(trade, rateChanges = []) {
     if (periodEnd > today) return; // ignore future
     const periodDays = differenceInDays(periodEnd, currentDate);
     if (periodDays > 0) {
-      const interest = trade.totalCost * currentRate / 100 / 365 * periodDays;
+      const interest = principal * currentRate / 100 / 365 * periodDays;
       periods.push({ startDate: currentDate, endDate: periodEnd, days: periodDays, rate: currentRate, interest, reason: idx === 0 ? 'Исходная ставка' : 'Изменение ЦБ' });
       totalInterest += interest;
       currentDate = periodEnd;
@@ -62,13 +71,13 @@ export function calculateTradeDetails(trade, rateChanges = []) {
   // Last period till today
   if (currentDate < today) {
     const periodDays = differenceInDays(today, currentDate);
-    const interest = trade.totalCost * currentRate / 100 / 365 * periodDays;
+    const interest = principal * currentRate / 100 / 365 * periodDays;
     periods.push({ startDate: currentDate, endDate: today, days: periodDays, rate: currentRate, interest, reason: 'Текущая ставка' });
     totalInterest += interest;
   }
 
   // Savings: difference between first rate and actual changes
-  const baselineInterest = trade.totalCost * Number(trade.marginAmount) / 100 / 365 * daysHeld;
+  const baselineInterest = principal * Number(trade.marginAmount) / 100 / 365 * daysHeld;
   const savingsFromRateChanges = baselineInterest - totalInterest;
 
   return { trade, daysHeld, currentRate, totalInterest, savingsFromRateChanges, periods };

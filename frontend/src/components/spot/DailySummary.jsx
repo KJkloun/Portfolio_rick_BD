@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { usePortfolio } from '../../contexts/PortfolioContext';
 import { formatPortfolioCurrency } from '../../utils/currencyFormatter';
+import SpotPageShell from './SpotPageShell';
+import { fetchPricesMap } from '../../utils/priceClient';
 
 function DailySummary() {
   const { currentPortfolio, refreshTrigger } = usePortfolio();
@@ -27,56 +29,31 @@ function DailySummary() {
     setLoading(true);
 
     try {
-      // Try to get data from localStorage first
-      let currentCash = 0;
-      let currentPositions = [];
+      const [statsResp, posResp] = await Promise.all([
+        axios.get('/api/spot-transactions/stats', {
+          headers: { 'X-Portfolio-ID': currentPortfolio.id }
+        }),
+        axios.get('/api/spot-transactions/positions/open', {
+          headers: { 'X-Portfolio-ID': currentPortfolio.id }
+        })
+      ]);
 
-      const cashData = JSON.parse(localStorage.getItem(`cashBalance_${currentPortfolio.id}`) || 'null');
-      const positionsData = JSON.parse(localStorage.getItem(`currentPositions_${currentPortfolio.id}`) || 'null');
-
-      if (cashData && positionsData) {
-        // Use localStorage data
-        currentCash = cashData.balance || 0;
-        currentPositions = positionsData;
-      } else {
-        // Fallback: fetch and calculate from API
-        const response = await axios.get('/api/spot-transactions', {
-          headers: {
-            'X-Portfolio-ID': currentPortfolio.id
-          }
-        });
-        
-        const transactions = response.data;
-        
-        // Calculate cash balance
-        currentCash = calculateCashBalance(transactions);
-        
-        // Calculate current positions
-        currentPositions = calculateCurrentPositions(transactions);
-      }
-
-      // Get stock prices from localStorage
-      const stockPrices = JSON.parse(localStorage.getItem('stockPrices') || '{}');
-
-      // Calculate position values with current prices
-      const positionsWithPrices = currentPositions.map(pos => {
-        const currentPrice = stockPrices[pos.ticker] || pos.averagePrice || 0;
+      const stats = statsResp.data || {};
+      const positions = Array.isArray(posResp.data) ? posResp.data : [];
+      const tickers = [...new Set(positions.map(p => p.ticker).filter(Boolean))];
+      const stockPrices = await fetchPricesMap(tickers);
+      const positionsWithPrices = positions.map(pos => {
+        const currentPrice = stockPrices[pos.ticker] || pos.avgPrice || 0;
         const currentValue = pos.quantity * currentPrice;
-        const unrealizedPL = currentValue - (pos.quantity * pos.averagePrice);
-        
-        return {
-          ...pos,
-          currentPrice,
-          currentValue,
-          unrealizedPL
-        };
+        const unrealizedPL = currentValue - (pos.quantity * pos.avgPrice);
+        return { ...pos, currentPrice, currentValue, unrealizedPL };
       });
 
       const totalPositionValue = positionsWithPrices.reduce((sum, pos) => sum + pos.currentValue, 0);
-      const totalPortfolioValue = currentCash + totalPositionValue;
+      const totalPortfolioValue = (stats.cashBalance || 0) + totalPositionValue;
 
       setSummary({
-        currentCash,
+        currentCash: stats.cashBalance || 0,
         currentPositions: positionsWithPrices,
         totalPositionValue,
         totalPortfolioValue,
@@ -88,89 +65,6 @@ function DailySummary() {
     } finally {
       setLoading(false);
     }
-  };
-
-  const calculateCashBalance = (transactions) => {
-    let balance = 0;
-    
-    transactions.forEach(tx => {
-      // Use backend amount directly (already has correct sign)
-      const amount = parseFloat(tx.amount) || parseFloat(tx.totalAmount) || 0;
-      balance += amount;
-    });
-    
-    return balance;
-  };
-
-  const calculateCurrentPositions = (transactions) => {
-    const tickerData = {};
-
-    // Process all transactions using FIFO method
-    transactions.forEach(tx => {
-      const ticker = tx.ticker;
-      const transactionType = tx.transactionType;
-      const price = parseFloat(tx.price) || 0;
-      const quantity = parseFloat(tx.quantity) || 0;
-
-      if (ticker && ticker !== 'USD' && (transactionType === 'BUY' || transactionType === 'SELL')) {
-        if (!tickerData[ticker]) {
-          tickerData[ticker] = {
-            company: tx.company || ticker,
-            transactions: [],
-            remaining: 0
-          };
-        }
-
-        if (transactionType === 'BUY') {
-          // Add purchase transaction for FIFO calculation
-          tickerData[ticker].transactions.push({ price: price, quantity: quantity });
-          tickerData[ticker].remaining += quantity;
-        } else if (transactionType === 'SELL' && tickerData[ticker].remaining > 0) {
-          // Process sales using FIFO method
-          let remainingToSell = quantity;
-          
-          while (remainingToSell > 0 && tickerData[ticker].transactions.length > 0) {
-            const firstTransaction = tickerData[ticker].transactions[0];
-            
-            if (firstTransaction.quantity > remainingToSell) {
-              firstTransaction.quantity -= remainingToSell;
-              tickerData[ticker].remaining -= remainingToSell;
-              remainingToSell = 0;
-            } else {
-              tickerData[ticker].remaining -= firstTransaction.quantity;
-              remainingToSell -= firstTransaction.quantity;
-              tickerData[ticker].transactions.shift();
-            }
-          }
-        }
-      }
-    });
-
-    // Calculate current positions with average prices
-    const positions = [];
-    Object.keys(tickerData).forEach(ticker => {
-      const data = tickerData[ticker];
-      if (data.remaining > 0) {
-        let totalCost = 0;
-        let totalQuantity = 0;
-        
-        data.transactions.forEach(transaction => {
-          totalCost += transaction.price * transaction.quantity;
-          totalQuantity += transaction.quantity;
-        });
-        
-        const averagePrice = totalQuantity > 0 ? totalCost / totalQuantity : 0;
-        
-        positions.push({
-          ticker,
-          company: data.company,
-          quantity: data.remaining,
-          averagePrice
-        });
-      }
-    });
-
-    return positions;
   };
 
   const formatCurrency = (amount) => {
@@ -187,10 +81,9 @@ function DailySummary() {
 
   if (!currentPortfolio) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-gray-50 to-white flex items-center justify-center">
-        <div className="text-center">
-          <div className="text-gray-400 mb-4">📊</div>
-          <p className="text-gray-700 mb-4">Портфель не выбран</p>
+      <SpotPageShell title="Итоги на день" subtitle="Общий обзор портфеля" badge="Spot портфель">
+        <div className="text-center space-y-3 py-16">
+          <p className="text-gray-700">Портфель не выбран</p>
           <button
             onClick={() => window.location.href = '/'}
             className="bg-gray-800 text-white px-4 py-2 rounded-lg hover:bg-gray-700 transition-colors"
@@ -198,19 +91,16 @@ function DailySummary() {
             Выбрать портфель
           </button>
         </div>
-      </div>
+      </SpotPageShell>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-white">
-      <div className="container-fluid p-4 max-w-7xl mx-auto">
-        
-        {/* Header */}
-        <div className="mb-6">
-          <h3 className="text-2xl font-light text-gray-800 mb-2">Итоги на день</h3>
-          <p className="text-gray-500">Общий обзор портфеля ({currentPortfolio?.currency || 'USD'})</p>
-        </div>
+    <SpotPageShell
+      title="Итоги на день"
+      subtitle={`Общий обзор портфеля (${currentPortfolio?.currency || 'USD'})`}
+      badge="Spot портфель"
+    >
 
         {/* Current Balance - Featured Card */}
         <div className="mb-6">
@@ -261,7 +151,7 @@ function DailySummary() {
               <div className={`text-2xl font-light ${
                 summary.currentPositions.reduce((sum, pos) => sum + (pos.unrealizedPL || 0), 0) >= 0 ? 'text-green-500' : 'text-red-500'
               }`}>
-                {summary.currentPositions.reduce((sum, pos) => sum + (pos.unrealizedPL || 0), 0) >= 0 ? '📈' : '📉'}
+                {summary.currentPositions.reduce((sum, pos) => sum + (pos.unrealizedPL || 0), 0) >= 0 ? 'Рост' : 'Падение'}
               </div>
               <div className="text-xs text-gray-400">
                 {summary.currentPositions.reduce((sum, pos) => sum + (pos.unrealizedPL || 0), 0) >= 0 ? 'прибыль' : 'убыток'}
@@ -378,8 +268,7 @@ function DailySummary() {
 
         </div>
 
-      </div>
-    </div>
+    </SpotPageShell>
   );
 }
 

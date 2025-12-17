@@ -6,7 +6,8 @@ import './index.css'
 import axios from 'axios'
 
 // Настройка axios для работы с API бэкенда
-axios.defaults.baseURL = 'http://localhost:8081';
+const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8081';
+axios.defaults.baseURL = apiBaseUrl.replace(/\/$/, '');
 
 // Добавляем interceptor для автоматического добавления токена авторизации
 axios.interceptors.request.use(
@@ -33,6 +34,12 @@ axios.interceptors.request.use(
 axios.interceptors.response.use(
   (response) => response,
   (error) => {
+    const url = error.config?.url || '';
+    const status = error.response?.status;
+    // Тихо игнорируем 404 для опционального спотового summary
+    if (status === 404 && url.includes('/spot/summary')) {
+      return Promise.resolve({ data: null, status: 404, headers: {}, config: error.config });
+    }
     console.error('API Error:', error.response?.data || error.message);
     
     // Если получили 401 ошибку, очищаем токен и перенаправляем на логин

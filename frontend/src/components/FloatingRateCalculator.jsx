@@ -14,6 +14,7 @@ import {
   Tooltip,
   Legend,
 } from 'chart.js';
+import MarginPageShell from './margin/MarginPageShell';
 
 ChartJS.register(
   CategoryScale,
@@ -133,6 +134,14 @@ function FloatingRateCalculator() {
     saveRateChanges(updatedRates);
   };
 
+  const getPrincipal = (trade) => {
+    if (!trade) return 0;
+    if (trade.borrowedAmount != null) return Number(trade.borrowedAmount);
+    if (trade.totalCost != null) return Number(trade.totalCost);
+    if (trade.entryPrice && trade.quantity) return Number(trade.entryPrice) * Number(trade.quantity);
+    return 0;
+  };
+
   // Получение ставки для конкретной сделки на определенную дату
   const getRateForTradeOnDate = (trade, date) => {
     const tradeDate = new Date(trade.entryDate);
@@ -182,7 +191,7 @@ function FloatingRateCalculator() {
       const periodDays = differenceInDays(firstPeriodEnd, currentDate);
       if (periodDays > 0) {
         const dailyRate = Number(trade.marginAmount) / 100 / 365;
-        const periodInterest = trade.totalCost * dailyRate * periodDays;
+        const periodInterest = getPrincipal(trade) * dailyRate * periodDays;
         
         periods.push({
           startDate: currentDate,
@@ -213,7 +222,7 @@ function FloatingRateCalculator() {
         const periodDays = differenceInDays(periodEnd, periodStart);
         if (periodDays > 0) {
           const dailyRate = change.rate / 100 / 365;
-          const periodInterest = trade.totalCost * dailyRate * periodDays;
+        const periodInterest = getPrincipal(trade) * dailyRate * periodDays;
           
           periods.push({
             startDate: periodStart,
@@ -251,8 +260,9 @@ function FloatingRateCalculator() {
     
     if (currentRate >= originalRate) return 0;
     
-    const originalDailyInterest = trade.totalCost * originalRate / 100 / 365;
-    const currentDailyInterest = trade.totalCost * currentRate / 100 / 365;
+    const principal = getPrincipal(trade);
+    const originalDailyInterest = principal * originalRate / 100 / 365;
+    const currentDailyInterest = principal * currentRate / 100 / 365;
     
     return (originalDailyInterest - currentDailyInterest) * daysHeld;
   };
@@ -332,7 +342,7 @@ function FloatingRateCalculator() {
         const entryDate = new Date(trade.entryDate);
         if (date >= entryDate) {
           const currentRate = getRateForTradeOnDate(trade, date);
-          const dailyInterest = trade.totalCost * currentRate / 100 / 365;
+          const dailyInterest = getPrincipal(trade) * currentRate / 100 / 365;
           dailyTotal += dailyInterest;
         }
       });
@@ -472,14 +482,18 @@ function FloatingRateCalculator() {
   const overallInterestChartData = prepareAggregatedInterestChartData(overallPeriods);
   const symbolRateChartData = prepareAggregatedRateChartData(symbolPeriods);
   const symbolInterestChartData = prepareAggregatedInterestChartData(symbolPeriods);
+  const openTrades = trades.filter(t => !t.exitDate);
+  const avgOpenRate = openTrades.length
+    ? openTrades.reduce((s, t) => s + Number(t.marginAmount || 0), 0) / openTrades.length
+    : 0;
 
   if (loading) {
     return (
-      <div className="d-flex justify-content-center align-items-center" style={{ height: '400px' }}>
-        <div className="spinner-border text-primary" role="status">
-          <span className="visually-hidden">Загрузка...</span>
+      <MarginPageShell title="Ставки ЦБ/финансирования" subtitle="Загрузка..." badge="Rates">
+        <div className="flex items-center justify-center py-12">
+          <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-gray-300"></div>
         </div>
-      </div>
+      </MarginPageShell>
     );
   }
 
@@ -532,13 +546,40 @@ function FloatingRateCalculator() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-white">
-      <div className="container-fluid p-4 max-w-7xl mx-auto">
-        {/* Header */}
-        <div className="mb-6">
-          <h3 className="text-2xl font-light text-gray-800 mb-2">Ставки ЦБ РФ</h3>
-          <p className="text-gray-500">Управление изменениями ставки и анализ влияния на открытые позиции</p>
+    <MarginPageShell
+      title="Ставки ЦБ РФ"
+      subtitle="Управление изменениями ставки и анализ влияния на открытые позиции"
+      badge="Rates"
+      actions={
+        <div className="flex flex-wrap gap-3">
+          <button 
+            onClick={() => setViewMode('trade')}
+            className={`px-4 py-2 rounded-lg text-sm ${viewMode === 'trade' ? 'bg-gray-900 text-white' : 'bg-white/70 border border-gray-200 text-gray-700'}`}
+          >
+            По сделке
+          </button>
+          <button 
+            onClick={() => setViewMode('overall')}
+            className={`px-4 py-2 rounded-lg text-sm ${viewMode === 'overall' ? 'bg-gray-900 text-white' : 'bg-white/70 border border-gray-200 text-gray-700'}`}
+          >
+            По всем
+          </button>
+          <button 
+            onClick={() => setViewMode('symbol')}
+            className={`px-4 py-2 rounded-lg text-sm ${viewMode === 'symbol' ? 'bg-gray-900 text-white' : 'bg-white/70 border border-gray-200 text-gray-700'}`}
+          >
+            По тикеру
+          </button>
         </div>
+      }
+    >
+
+      <div className="mb-6 grid grid-cols-1 md:grid-cols-4 gap-3">
+        <SummaryCard label="Открытые сделки" value={openTrades.length} />
+        <SummaryCard label="Средняя ставка" value={`${avgOpenRate.toFixed(1)}%`} />
+        <SummaryCard label="Изменений ставки" value={rateChanges.length} />
+        <SummaryCard label="Режим" value={viewMode === 'trade' ? 'По сделке' : viewMode === 'symbol' ? 'По тикеру' : 'Общий'} />
+      </div>
 
         {/* Переключатель режимов (перемещён в блок "Открытые позиции") */}
         {false && (<div className="mb-4 flex gap-2">
@@ -1043,7 +1084,15 @@ function FloatingRateCalculator() {
             )}
           </div>
         </div>
-      </div>
+    </MarginPageShell>
+  );
+}
+
+function SummaryCard({ label, value }) {
+  return (
+    <div className="bg-white/80 backdrop-blur-sm rounded-2xl border border-slate-100 p-4 shadow-sm">
+      <div className="text-xs uppercase tracking-[0.16em] text-slate-500 mb-1">{label}</div>
+      <div className="text-lg font-semibold text-slate-900">{value}</div>
     </div>
   );
 }

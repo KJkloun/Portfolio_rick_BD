@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import axios from 'axios';
 import { usePortfolio } from '../../contexts/PortfolioContext';
 import { formatPortfolioCurrency } from '../../utils/currencyFormatter';
+import SpotPageShell from './SpotPageShell';
 
 function BoughtStocks() {
   const { currentPortfolio, refreshTrigger } = usePortfolio();
@@ -26,13 +27,17 @@ function BoughtStocks() {
           'X-Portfolio-ID': currentPortfolio.id
         }
       });
-      const allTransactions = response.data;
-      
-      // Filter only BUY transactions
-      const boughtStocks = allTransactions
+      const data = response.data;
+      const transformed = Array.isArray(data) ? data.map(tx => ({
+        ...tx,
+        tradeDate: tx.transactionDate || tx.tradeDate,
+        totalAmount: tx.amount || tx.totalAmount
+      })) : [];
+
+      const boughtStocks = transformed
         .filter(tx => tx.transactionType === 'BUY')
         .sort((a, b) => new Date(b.tradeDate) - new Date(a.tradeDate));
-      
+
       setTransactions(boughtStocks);
     } catch (error) {
       console.error('Error fetching bought stocks:', error);
@@ -45,132 +50,73 @@ function BoughtStocks() {
     return formatPortfolioCurrency(amount, currentPortfolio, 2);
   };
 
-  const totalAmount = transactions.reduce((sum, tx) => sum + Math.abs(tx.amount), 0);
+  const totalAmount = transactions.reduce((sum, tx) => sum + Math.abs(tx.amount || 0), 0);
   const uniqueStocks = [...new Set(transactions.map(tx => tx.ticker))].length;
+  const avgAmount = transactions.length ? totalAmount / transactions.length : 0;
 
   if (loading) {
     return (
-      <div className="flex justify-center items-center h-64">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-[#9333ea]"></div>
-      </div>
+      <SpotPageShell title="Купленные позиции" subtitle="Загрузка данных..." badge="Spot портфель">
+        <div className="flex justify-center items-center py-16">
+          <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-slate-800"></div>
+        </div>
+      </SpotPageShell>
     );
   }
 
   return (
-    <div className="max-w-7xl mx-auto space-y-6">
-      {/* Header Card */}
-      <div className="bg-white rounded-lg shadow-sm border border-gray-200">
-        <div className="p-6">
-          <h1 className="text-2xl font-semibold text-gray-900">Купленные акции</h1>
-          <p className="text-sm text-gray-500 mt-1">Все операции покупки акций в хронологическом порядке</p>
-        </div>
+    <SpotPageShell
+      title="Купленные позиции"
+      subtitle="Все операции покупки в хронологическом порядке"
+      badge="Spot портфель"
+    >
+
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+        <Metric label="Всего операций" value={transactions.length} tone="slate" />
+        <Metric label="Уникальных тикеров" value={uniqueStocks} tone="emerald" />
+        <Metric label="Общая сумма" value={formatCurrency(totalAmount)} tone="indigo" />
+        <Metric label="Средняя сумма" value={formatCurrency(avgAmount)} tone="amber" />
       </div>
 
-      {/* Summary Cards */}
-      <div className="bg-white rounded-lg shadow-sm border border-gray-200">
-        <div className="p-6">
-          <h2 className="text-lg font-semibold text-gray-900 mb-4">Статистика покупок</h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            <div className="bg-blue-50 rounded-lg p-4">
-              <div className="flex items-center">
-                <div className="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center text-lg mr-3">
-                  📊
-                </div>
-                <div>
-                  <div className="text-sm text-blue-600 font-medium">Всего операций</div>
-                  <div className="text-lg font-bold text-blue-800">{transactions.length}</div>
-                </div>
-              </div>
-            </div>
-            <div className="bg-green-50 rounded-lg p-4">
-              <div className="flex items-center">
-                <div className="w-10 h-10 bg-green-100 rounded-full flex items-center justify-center text-lg mr-3">
-                  📈
-                </div>
-                <div>
-                  <div className="text-sm text-green-600 font-medium">Уникальных акций</div>
-                  <div className="text-lg font-bold text-green-800">{uniqueStocks}</div>
-                </div>
-              </div>
-            </div>
-            <div className="bg-red-50 rounded-lg p-4">
-              <div className="flex items-center">
-                <div className="w-10 h-10 bg-red-100 rounded-full flex items-center justify-center text-lg mr-3">
-                  💰
-                </div>
-                <div>
-                  <div className="text-sm text-red-600 font-medium">Общая сумма</div>
-                  <div className="text-lg font-bold text-red-800">{formatCurrency(totalAmount)}</div>
-                </div>
-              </div>
-            </div>
-            <div className="bg-purple-50 rounded-lg p-4">
-              <div className="flex items-center">
-                <div className="w-10 h-10 bg-purple-100 rounded-full flex items-center justify-center text-lg mr-3">
-                  📊
-                </div>
-                <div>
-                  <div className="text-sm text-purple-600 font-medium">Средняя сумма</div>
-                  <div className="text-lg font-bold text-purple-800">
-                    {transactions.length > 0 ? formatCurrency(totalAmount / transactions.length) : formatCurrency(0)}
-                  </div>
-                </div>
-              </div>
-            </div>
+      <div className="bg-white/80 backdrop-blur-sm rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+        <div className="p-6 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-semibold text-slate-900">История покупок</h2>
+            <p className="text-sm text-slate-500">Детальная информация по каждой операции</p>
           </div>
-        </div>
-      </div>
-
-      {/* Transactions Table */}
-      <div className="bg-white rounded-lg shadow-sm border border-gray-200">
-        <div className="p-6 border-b border-gray-200">
-          <h2 className="text-lg font-semibold text-gray-900">История покупок</h2>
-          <p className="text-sm text-gray-500 mt-1">Детальная информация по каждой операции покупки</p>
         </div>
 
         <div className="overflow-x-auto">
-          <table className="w-full">
-            <thead className="bg-gray-50">
+          <table className="w-full spot-table">
+            <thead className="bg-slate-50">
               <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">№</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Дата</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Компания</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Тикер</th>
-                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Цена</th>
-                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Кол-во</th>
-                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Сумма</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Примечание</th>
+                <Th>№</Th>
+                <Th>Дата</Th>
+                <Th>Компания</Th>
+                <Th>Тикер</Th>
+                <Th align="right">Цена</Th>
+                <Th align="right">Кол-во</Th>
+                <Th align="right">Сумма</Th>
+                <Th>Примечание</Th>
               </tr>
             </thead>
-            <tbody className="bg-white divide-y divide-gray-200">
+            <tbody className="bg-white divide-y divide-slate-100">
               {transactions.map((transaction, index) => (
-                <tr key={transaction.id} className="hover:bg-gray-50 transition-colors duration-150">
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                    {transactions.length - index}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                    {new Date(transaction.tradeDate).toLocaleDateString('ru-RU')}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                    {transaction.company}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-[#9333ea] hover:text-[#7c3aed]">
-                    <Link to={`/spot/ticker/${transaction.ticker}`} className="transition-colors duration-200">
+                <tr key={transaction.id} className="hover:bg-slate-50/60 transition-colors">
+                  <Td>{transactions.length - index}</Td>
+                  <Td>{new Date(transaction.tradeDate).toLocaleDateString('ru-RU')}</Td>
+                  <Td>{transaction.company}</Td>
+                  <Td className="font-semibold text-slate-800">
+                    <Link to={`/spot/ticker/${transaction.ticker}`} className="hover:text-slate-900">
                       {transaction.ticker}
                     </Link>
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 text-right">
-                    {formatCurrency(transaction.price)}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 text-right">
-                    {transaction.quantity.toLocaleString('ru-RU')}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-red-600 font-medium text-right">
+                  </Td>
+                  <Td align="right">{formatCurrency(transaction.price)}</Td>
+                  <Td align="right">{transaction.quantity.toLocaleString('ru-RU')}</Td>
+                  <Td align="right" className="text-rose-600 font-semibold">
                     {formatCurrency(Math.abs(transaction.amount))}
-                  </td>
-                  <td className="px-6 py-4 text-sm text-gray-900 max-w-xs truncate">
-                    {transaction.note}
-                  </td>
+                  </Td>
+                  <Td className="max-w-xs truncate text-slate-600">{transaction.note}</Td>
                 </tr>
               ))}
             </tbody>
@@ -179,17 +125,49 @@ function BoughtStocks() {
 
         {transactions.length === 0 && (
           <div className="text-center py-12">
-            <div className="text-gray-500 text-lg">Нет операций покупки</div>
-            <p className="text-gray-400 mt-2">
-              <Link to="/spot" className="text-[#9333ea] hover:text-[#7c3aed] transition-colors duration-200">
+            <div className="text-slate-600 text-lg">Нет операций покупки</div>
+            <p className="text-slate-400 mt-2">
+              <Link to="/spot" className="text-indigo-600 hover:text-indigo-700">
                 Добавьте операции покупки
               </Link>
             </p>
           </div>
         )}
       </div>
-    </div>
+    </SpotPageShell>
   );
 }
 
 export default BoughtStocks; 
+
+function Metric({ label, value, tone = 'slate' }) {
+  const tones = {
+    slate: 'bg-slate-50 text-slate-700',
+    emerald: 'bg-emerald-50 text-emerald-700',
+    indigo: 'bg-indigo-50 text-indigo-700',
+    amber: 'bg-amber-50 text-amber-700',
+  };
+  const toneClass = tones[tone] || tones.slate;
+  return (
+    <div className="bg-white/80 backdrop-blur-sm rounded-2xl shadow-sm border border-slate-100 p-4">
+      <div className={`inline-flex px-3 py-1 rounded-full text-xs font-semibold ${toneClass}`}>{label}</div>
+      <div className="mt-3 text-2xl number-unified">{value}</div>
+    </div>
+  );
+}
+
+function Th({ children, align = 'left' }) {
+  return (
+    <th className={`px-6 py-3 text-xs font-medium uppercase tracking-wide text-slate-500 ${align === 'right' ? 'text-right' : 'text-left'}`}>
+      {children}
+    </th>
+  );
+}
+
+function Td({ children, align = 'left', className = '' }) {
+  return (
+    <td className={`px-6 py-4 text-sm text-slate-800 ${align === 'right' ? 'text-right' : 'text-left'} ${className}`}>
+      {children}
+    </td>
+  );
+}

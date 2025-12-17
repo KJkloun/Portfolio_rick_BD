@@ -4,6 +4,7 @@ import { ru } from 'date-fns/locale';
 import { usePortfolio } from '../../contexts/PortfolioContext';
 import { formatPortfolioCurrency } from '../../utils/currencyFormatter';
 import axios from 'axios';
+import SpotPageShell from './SpotPageShell';
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -70,12 +71,15 @@ function AllTransactions() {
     note: ''
   });
 
+  const shellTitle = 'Все операции';
+  const shellSubtitle = 'Полная история операций по спотовому портфелю';
+
   const transactionTypes = [
-    { value: 'BUY', label: 'Покупка', color: 'bg-red-100 text-red-800', icon: '📈', cashFlow: -1 },
-    { value: 'SELL', label: 'Продажа', color: 'bg-green-100 text-green-800', icon: '📉', cashFlow: 1 },
-    { value: 'DEPOSIT', label: 'Поступление', color: 'bg-blue-100 text-blue-800', icon: '💰', cashFlow: 1 },
-    { value: 'WITHDRAW', label: 'Вывод', color: 'bg-orange-100 text-orange-800', icon: '💸', cashFlow: -1 },
-    { value: 'DIVIDEND', label: 'Дивиденды', color: 'bg-purple-100 text-purple-800', icon: '💎', cashFlow: 1 }
+    { value: 'BUY', label: 'Покупка', color: 'bg-red-100 text-red-800', cashFlow: -1 },
+    { value: 'SELL', label: 'Продажа', color: 'bg-green-100 text-green-800', cashFlow: 1 },
+    { value: 'DEPOSIT', label: 'Поступление', color: 'bg-blue-100 text-blue-800', cashFlow: 1 },
+    { value: 'WITHDRAW', label: 'Вывод', color: 'bg-orange-100 text-orange-800', cashFlow: -1 },
+    { value: 'DIVIDEND', label: 'Дивиденды', color: 'bg-purple-100 text-purple-800', cashFlow: 1 }
   ];
 
   useEffect(() => {
@@ -101,17 +105,28 @@ function AllTransactions() {
         }
       });
       const data = response.data;
-      
-      // Transform API data to match frontend expectations
+
       const transformedData = Array.isArray(data) ? data.map(tx => ({
         ...tx,
         tradeDate: tx.transactionDate || tx.tradeDate,
         totalAmount: tx.amount || tx.totalAmount
       })) : [];
-      
-      // Always update transactions, even if empty
+
       setTransactions(transformedData.sort((a, b) => new Date(b.tradeDate) - new Date(a.tradeDate)));
       calculateAnalytics(transformedData);
+
+      // Подтягиваем серверную сводку для шапки
+      try {
+        const statsResp = await axios.get('/api/spot-transactions/stats', { headers: { 'X-Portfolio-ID': currentPortfolio.id } });
+        if (statsResp.data) {
+          setAnalytics(prev => ({
+            ...prev,
+            serverStats: statsResp.data
+          }));
+        }
+      } catch (e) {
+        // ignore
+      }
     } catch (error) {
       console.error('Error fetching transactions:', error);
       setError('Ошибка загрузки транзакций: ' + error.message);
@@ -199,7 +214,8 @@ function AllTransactions() {
         Net Cash Flow: ${netCashFlow}
         Unique Stocks: ${uniqueStocks.size}`);
 
-      setAnalytics({
+      setAnalytics(prev => ({
+        ...(prev || {}),
         transactionCount,
         totalInvested: totalDeposits,
         totalReceived: totalStockPurchases,
@@ -208,7 +224,7 @@ function AllTransactions() {
         monthlyData,
         typeData,
         stockVolumes
-      });
+      }));
 
       // Update chart data
       updateChartData(monthlyData, typeData, stockVolumes);
@@ -372,11 +388,14 @@ function AllTransactions() {
     return transactionTypes.find(t => t.value === type) || transactionTypes[0];
   };
 
-  const filteredTransactions = transactions.filter(tx => 
-    tx.company?.toLowerCase().includes(filter.toLowerCase()) ||
-    tx.ticker?.toLowerCase().includes(filter.toLowerCase()) ||
-    tx.note?.toLowerCase().includes(filter.toLowerCase())
-  );
+  // Добавляем индекс, чтобы можно было развернуть порядок в пределах одного дня
+  const filteredTransactions = transactions
+    .map((tx, idx) => ({ ...tx, _originalIndex: idx }))
+    .filter(tx => 
+      tx.company?.toLowerCase().includes(filter.toLowerCase()) ||
+      tx.ticker?.toLowerCase().includes(filter.toLowerCase()) ||
+      tx.note?.toLowerCase().includes(filter.toLowerCase())
+    );
 
   const sortedTransactions = [...filteredTransactions].sort((a, b) => {
     let aVal = a[sortBy];
@@ -395,9 +414,14 @@ function AllTransactions() {
     }
     
     if (sortOrder === 'asc') {
-      return aVal < bVal ? -1 : aVal > bVal ? 1 : 0;
+      if (aVal < bVal) return -1;
+      if (aVal > bVal) return 1;
+      return a._originalIndex - b._originalIndex;
     } else {
-      return aVal > bVal ? -1 : aVal < bVal ? 1 : 0;
+      if (aVal > bVal) return -1;
+      if (aVal < bVal) return 1;
+      // внутри одного дня более ранняя запись (меньший индекс) опускается ниже
+      return b._originalIndex - a._originalIndex;
     }
   });
 
@@ -582,76 +606,76 @@ function AllTransactions() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-gray-50 to-white flex items-center justify-center">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-800 mx-auto mb-4"></div>
-          <p className="text-gray-500">Загрузка транзакций...</p>
+      <SpotPageShell title={shellTitle} subtitle={shellSubtitle} badge="Spot портфель">
+        <div className="flex items-center justify-center py-24 text-slate-500">
+          <div className="text-center">
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-slate-800 mx-auto mb-4"></div>
+            <p>Загрузка транзакций...</p>
+          </div>
         </div>
-      </div>
+      </SpotPageShell>
     );
   }
 
   if (error) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-gray-50 to-white flex items-center justify-center">
-        <div className="text-center">
-          <div className="text-red-500 mb-4">⚠️</div>
-          <p className="text-gray-700 mb-4">{error}</p>
+      <SpotPageShell title={shellTitle} subtitle={shellSubtitle} badge="Spot портфель">
+        <div className="text-center space-y-3 py-16">
+          <p className="text-slate-700">{error}</p>
           {error.includes('Портфель не выбран') && (
             <button
               onClick={() => window.location.href = '/'}
-              className="bg-gray-800 text-white px-4 py-2 rounded-lg hover:bg-gray-700 transition-colors"
+              className="bg-slate-900 text-white px-4 py-2 rounded-lg hover:bg-slate-800 transition-colors text-sm"
             >
               Выбрать портфель
             </button>
           )}
         </div>
-      </div>
+      </SpotPageShell>
     );
   }
 
   if (!currentPortfolio) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-gray-50 to-white flex items-center justify-center">
-        <div className="text-center">
-          <div className="text-gray-400 mb-4">📋</div>
-          <p className="text-gray-700 mb-4">Портфель не выбран</p>
-          <p className="text-gray-500 text-sm mb-4">Пожалуйста, выберите портфель для просмотра транзакций</p>
+      <SpotPageShell title={shellTitle} subtitle={shellSubtitle} badge="Spot портфель">
+        <div className="text-center space-y-3 py-16">
+          <p className="text-slate-700">Портфель не выбран</p>
+          <p className="text-slate-500 text-sm">Пожалуйста, выберите портфель для просмотра транзакций</p>
           <button
             onClick={() => window.location.href = '/'}
-            className="bg-gray-800 text-white px-4 py-2 rounded-lg hover:bg-gray-700 transition-colors"
+            className="bg-slate-900 text-white px-4 py-2 rounded-lg hover:bg-slate-800 transition-colors text-sm"
           >
             Выбрать портфель
           </button>
         </div>
-      </div>
+      </SpotPageShell>
     );
   }
 
+  const actions = (
+    <div className="flex gap-2">
+      <button
+        onClick={() => setShowImport(true)}
+        className="bg-white text-slate-800 px-4 py-2 rounded-lg border border-slate-200 hover:bg-slate-50 transition-colors text-sm"
+      >
+        Импорт
+      </button>
+      <button
+        onClick={() => setShowForm(true)}
+        className="bg-slate-900 text-white px-4 py-2 rounded-lg hover:bg-slate-800 transition-colors text-sm"
+      >
+        Новая транзакция
+      </button>
+    </div>
+  );
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-white">
-      <div className="container-fluid p-4 max-w-7xl mx-auto">
-        {/* Header */}
-        <div className="mb-6 flex justify-between items-center">
-          <div>
-            <h3 className="text-2xl font-light text-gray-800 mb-2">Все транзакции</h3>
-            <p className="text-gray-500">Полная история операций по спотовому портфелю (USD)</p>
-          </div>
-          <div className="flex gap-2">
-            <button
-              onClick={() => setShowImport(true)}
-              className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
-            >
-              📥 Импорт
-            </button>
-            <button
-              onClick={() => setShowForm(true)}
-              className="bg-gray-800 text-white px-4 py-2 rounded-lg hover:bg-gray-700 transition-colors"
-            >
-              + Новая транзакция
-            </button>
-          </div>
-        </div>
+    <SpotPageShell
+      title={shellTitle}
+      subtitle={shellSubtitle}
+      actions={actions}
+      badge="Spot портфель"
+    >
 
         {/* Transaction Form Modal */}
         {showForm && (
@@ -693,7 +717,7 @@ function AllTransactions() {
                   >
                     {transactionTypes.map(type => (
                       <option key={type.value} value={type.value}>
-                        {type.icon} {type.label}
+                        {type.label}
                       </option>
                     ))}
                   </select>
@@ -883,7 +907,7 @@ function AllTransactions() {
               <div className="bg-white/70 backdrop-blur-sm rounded-2xl shadow-sm border-0 overflow-hidden">
                 <div className="px-6 py-4 text-center">
                   <div className="text-2xl font-light text-gray-800">
-                    {analytics.transactionCount || 0}
+                    {analytics?.transactionCount || 0}
                   </div>
                   <div className="text-xs text-gray-400">всего операций</div>
                 </div>
@@ -892,27 +916,27 @@ function AllTransactions() {
               <div className="bg-white/70 backdrop-blur-sm rounded-2xl shadow-sm border-0 overflow-hidden">
                 <div className="px-6 py-4 text-center">
                   <div className="text-2xl font-light text-indigo-600">
-                    {formatCurrency(analytics.totalInvested || 0)}
+                    {formatCurrency((analytics?.serverStats?.totalInvested ?? analytics?.totalInvested) || 0)}
                   </div>
-                  <div className="text-xs text-gray-400">поступления на счет</div>
+                  <div className="text-xs text-gray-400">инвестировано</div>
                 </div>
               </div>
               
               <div className="bg-white/70 backdrop-blur-sm rounded-2xl shadow-sm border-0 overflow-hidden">
                 <div className="px-6 py-4 text-center">
                   <div className="text-2xl font-light text-indigo-600">
-                    {formatCurrency(analytics.totalReceived || 0)}
+                    {formatCurrency((analytics?.serverStats?.totalReceived ?? analytics?.totalReceived ?? analytics?.totalInvested) || 0)}
                   </div>
-                  <div className="text-xs text-gray-400">потрачено на акции</div>
+                  <div className="text-xs text-gray-400">продажи/поступления</div>
                 </div>
               </div>
               
               <div className="bg-white/70 backdrop-blur-sm rounded-2xl shadow-sm border-0 overflow-hidden">
                 <div className="px-6 py-4 text-center">
-                  <div className={`text-2xl font-light ${(analytics.netCashFlow || 0) >= 0 ? 'text-green-500' : 'text-red-500'}`}>
-                    {formatCurrency(analytics.netCashFlow || 0)}
+                  <div className={`text-2xl font-light ${((analytics?.serverStats?.cashBalance ?? analytics?.netCashFlow) || 0) >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                    {formatCurrency((analytics?.serverStats?.cashBalance ?? analytics?.netCashFlow) || 0)}
                   </div>
-                  <div className="text-xs text-gray-400">чистый денежный поток</div>
+                  <div className="text-xs text-gray-400">свободные средства</div>
                 </div>
               </div>
             </div>
@@ -1100,7 +1124,7 @@ function AllTransactions() {
                         </td>
                         <td className="px-4 py-4">
                           <span className={`inline-flex px-2 py-1 text-xs font-medium rounded-full ${transactionType?.color || 'bg-gray-100 text-gray-800'}`}>
-                            {transactionType?.icon} {transactionType?.label || transaction.transactionType}
+                            {transactionType?.label || transaction.transactionType}
                           </span>
                         </td>
                         <td className="px-4 py-4 text-sm text-gray-800 text-right">
@@ -1122,14 +1146,14 @@ function AllTransactions() {
                               className="text-blue-600 hover:text-blue-800 text-sm"
                               title="Редактировать"
                             >
-                              ✏️
+                              Изм.
                             </button>
                             <button
                               onClick={() => handleDelete(transaction.id)}
                               className="text-red-600 hover:text-red-800 text-sm"
                               title="Удалить"
                             >
-                              🗑️
+                              Удал.
                             </button>
                           </div>
                         </td>
@@ -1145,8 +1169,7 @@ function AllTransactions() {
             </div>
           )}
         </div>
-      </div>
-    </div>
+    </SpotPageShell>
   );
 }
 

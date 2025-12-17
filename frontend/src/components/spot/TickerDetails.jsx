@@ -3,6 +3,8 @@ import { useParams, Link } from 'react-router-dom';
 import axios from 'axios';
 import { usePortfolio } from '../../contexts/PortfolioContext';
 import { formatPortfolioCurrency } from '../../utils/currencyFormatter';
+import SpotPageShell from './SpotPageShell';
+import { fetchPricesMap } from '../../utils/priceClient';
 
 function TickerDetails() {
   const { ticker } = useParams();
@@ -66,14 +68,9 @@ function TickerDetails() {
         averageSellPrice = totalRevenue / totalSold;
       }
       
-      // Текущая цена берётся из сохранённых курсов или из средней цены покупки, если курс не задан
-      let currentPrice = averageBuyPrice;
-      try {
-        const saved = JSON.parse(localStorage.getItem('stockPrices')) || {};
-        if (saved[ticker]) {
-          currentPrice = saved[ticker];
-        }
-      } catch {}
+      // Текущая цена берётся из бэкового кэша или из средней цены покупки, если курс не задан
+      const priceMap = await fetchPricesMap([ticker]);
+      const currentPrice = priceMap[ticker] || averageBuyPrice;
       
       const currentValue = totalQuantity * currentPrice;
       const realizedPnL = totalRevenue - (totalSold * averageBuyPrice);
@@ -112,64 +109,41 @@ function TickerDetails() {
 
   const getTypeConfig = (type) => {
     const types = {
-      'DEPOSIT': { label: 'Поступление', color: 'bg-green-100 text-green-800', icon: '💰' },
-      'WITHDRAW': { label: 'Снятие', color: 'bg-red-100 text-red-800', icon: '💸' },
-      'BUY': { label: 'Покупка', color: 'bg-blue-100 text-blue-800', icon: '📈' },
-      'SELL': { label: 'Продажа', color: 'bg-orange-100 text-orange-800', icon: '📉' },
-      'DIVIDEND': { label: 'Дивиденды', color: 'bg-purple-100 text-purple-800', icon: '💎' }
+      'DEPOSIT': { label: 'Поступление', color: 'bg-green-100 text-green-800' },
+      'WITHDRAW': { label: 'Снятие', color: 'bg-red-100 text-red-800' },
+      'BUY': { label: 'Покупка', color: 'bg-blue-100 text-blue-800' },
+      'SELL': { label: 'Продажа', color: 'bg-orange-100 text-orange-800' },
+      'DIVIDEND': { label: 'Дивиденды', color: 'bg-purple-100 text-purple-800' }
     };
-    return types[type] || { label: type, color: 'bg-gray-100 text-gray-800', icon: '📄' };
+    return types[type] || { label: type, color: 'bg-gray-100 text-gray-800' };
   };
 
   if (loading) {
     return (
-      <div className="flex justify-center items-center h-64">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-[#9333ea]"></div>
-      </div>
+      <SpotPageShell title="Тикер" subtitle="Загрузка данных..." badge="Spot портфель">
+        <div className="flex justify-center items-center py-16">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-slate-800"></div>
+        </div>
+      </SpotPageShell>
     );
   }
 
   return (
-    <div className="max-w-7xl mx-auto space-y-6">
-      {/* Header Card */}
-      <div className="bg-white rounded-lg shadow-sm border border-gray-200">
-        <div className="p-6">
-          <div className="flex justify-between items-center">
-            <div>
-              <div className="flex items-center gap-3 mb-2">
-                <Link 
-                  to="/spot" 
-                  className="text-gray-400 hover:text-[#9333ea] transition-colors duration-200"
-                >
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
-                  </svg>
-                </Link>
-                <h1 className="text-2xl font-semibold text-gray-900">
-                  {ticker} - {summary.company}
-                </h1>
-              </div>
-              <p className="text-sm text-gray-500">Детальная статистика и история операций по тикеру</p>
-            </div>
-            <div className="text-right">
-              <div className="text-sm text-gray-500">Общая П/У</div>
-              <div className={`text-2xl font-bold ${summary.totalPnL >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                {formatCurrency(summary.totalPnL)}
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
+    <SpotPageShell
+      title={`${ticker} - ${summary.company || ''}`}
+      subtitle="Детальная статистика и история операций по тикеру"
+      badge="Spot портфель"
+    >
 
       {/* Summary Cards */}
-      <div className="bg-white rounded-lg shadow-sm border border-gray-200">
+      <div className="bg-white/80 backdrop-blur-sm rounded-2xl shadow-sm border border-slate-100">
         <div className="p-6">
           <h2 className="text-lg font-semibold text-gray-900 mb-4">Основные показатели</h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
             <div className="bg-blue-50 rounded-lg p-4">
               <div className="flex items-center">
                 <div className="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center text-lg mr-3">
-                  📊
+                  <span className="text-sm font-semibold text-blue-700">QTY</span>
                 </div>
                 <div>
                   <div className="text-sm text-blue-600 font-medium">Текущий остаток</div>
@@ -182,7 +156,7 @@ function TickerDetails() {
             <div className="bg-green-50 rounded-lg p-4">
               <div className="flex items-center">
                 <div className="w-10 h-10 bg-green-100 rounded-full flex items-center justify-center text-lg mr-3">
-                  💰
+                  <span className="text-sm font-semibold text-green-700">₽</span>
                 </div>
                 <div>
                   <div className="text-sm text-green-600 font-medium">Текущая стоимость</div>
@@ -195,7 +169,7 @@ function TickerDetails() {
             <div className="bg-purple-50 rounded-lg p-4">
               <div className="flex items-center">
                 <div className="w-10 h-10 bg-purple-100 rounded-full flex items-center justify-center text-lg mr-3">
-                  💎
+                  <span className="text-sm font-semibold text-purple-700">Div</span>
                 </div>
                 <div>
                   <div className="text-sm text-purple-600 font-medium">Дивиденды</div>
@@ -208,7 +182,9 @@ function TickerDetails() {
             <div className={`${summary.totalPnL >= 0 ? 'bg-green-50' : 'bg-red-50'} rounded-lg p-4`}>
               <div className="flex items-center">
                 <div className={`w-10 h-10 ${summary.totalPnL >= 0 ? 'bg-green-100' : 'bg-red-100'} rounded-full flex items-center justify-center text-lg mr-3`}>
-                  {summary.totalPnL >= 0 ? '📈' : '📉'}
+                  <span className={`text-sm font-semibold ${summary.totalPnL >= 0 ? 'text-green-700' : 'text-red-700'}`}>
+                    {summary.totalPnL >= 0 ? 'Up' : 'Down'}
+                  </span>
                 </div>
                 <div>
                   <div className={`text-sm font-medium ${summary.totalPnL >= 0 ? 'text-green-600' : 'text-red-600'}`}>
@@ -226,7 +202,7 @@ function TickerDetails() {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6 text-sm">
             <div className="bg-gray-50 rounded-lg p-4">
               <h3 className="font-semibold text-gray-900 mb-3 flex items-center">
-                <span className="w-6 h-6 bg-blue-100 rounded-full flex items-center justify-center text-xs mr-2">📈</span>
+                <span className="w-6 h-6 bg-blue-100 rounded-full flex items-center justify-center text-[10px] font-semibold mr-2">BUY</span>
                 Операции покупки
               </h3>
               <div className="space-y-2 text-gray-600">
@@ -246,7 +222,7 @@ function TickerDetails() {
             </div>
             <div className="bg-gray-50 rounded-lg p-4">
               <h3 className="font-semibold text-gray-900 mb-3 flex items-center">
-                <span className="w-6 h-6 bg-orange-100 rounded-full flex items-center justify-center text-xs mr-2">📉</span>
+                <span className="w-6 h-6 bg-orange-100 rounded-full flex items-center justify-center text-[10px] font-semibold mr-2">SELL</span>
                 Операции продажи
               </h3>
               <div className="space-y-2 text-gray-600">
@@ -266,7 +242,7 @@ function TickerDetails() {
             </div>
             <div className="bg-gray-50 rounded-lg p-4">
               <h3 className="font-semibold text-gray-900 mb-3 flex items-center">
-                <span className="w-6 h-6 bg-indigo-100 rounded-full flex items-center justify-center text-xs mr-2">📊</span>
+                <span className="w-6 h-6 bg-indigo-100 rounded-full flex items-center justify-center text-[10px] font-semibold mr-2">POS</span>
                 Текущая позиция
               </h3>
               <div className="space-y-2 text-gray-600">
@@ -293,8 +269,8 @@ function TickerDetails() {
       </div>
 
       {/* Transactions Table */}
-      <div className="bg-white rounded-lg shadow-sm border border-gray-200">
-        <div className="p-6 border-b border-gray-200">
+      <div className="bg-white/80 backdrop-blur-sm rounded-2xl shadow-sm border border-slate-100">
+        <div className="p-6 border-b border-slate-100">
           <h2 className="text-lg font-semibold text-gray-900">История операций</h2>
           <p className="text-sm text-gray-500 mt-1">Все операции по тикеру {ticker}</p>
         </div>
@@ -325,7 +301,7 @@ function TickerDetails() {
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${typeConfig.color}`}>
-                        {typeConfig.icon} {typeConfig.label}
+                        {typeConfig.label}
                       </span>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 text-right">
@@ -360,7 +336,7 @@ function TickerDetails() {
           </div>
         )}
       </div>
-    </div>
+    </SpotPageShell>
   );
 }
 

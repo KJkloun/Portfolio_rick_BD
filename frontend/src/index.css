@@ -17,10 +17,13 @@
   html {
     @apply antialiased;
     font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv09';
+    font-family: 'Inter var', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   }
   
   body {
     @apply bg-gray-50 text-gray-900;
+    font-family: 'Inter var', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-variant-numeric: tabular-nums;
   }
 
   /* Шрифт Inter для банковского стиля */
@@ -34,6 +37,20 @@
 }
 
 @layer components {
+  /* Единый стиль цифр для показателей */
+  .number-unified {
+    font-variant-numeric: tabular-nums;
+    @apply font-semibold text-slate-900 tracking-tight;
+  }
+
+  /* Унифицированные цифры на спотовых таблицах */
+  .spot-table th,
+  .spot-table td,
+  .spot-number {
+    font-variant-numeric: tabular-nums;
+    font-family: 'Inter var', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  }
+
   /* Карточки в стиле банковских интерфейсов */
   .bank-card {
     @apply bg-white rounded-2xl shadow-card transition-all duration-300 p-6 border border-gray-100 hover:shadow-card-hover;
