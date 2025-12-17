@@ -1,0 +1,80 @@
+erDiagram
+    USERS {
+        BIGINT id PK
+        STRING username
+        STRING email
+        STRING password
+        STRING first_name
+        STRING last_name
+        TIMESTAMP created_at
+        BOOLEAN enabled
+    }
+
+    PORTFOLIOS {
+        BIGINT id PK
+        BIGINT user_id FK
+        STRING name
+        STRING portfolio_type
+        CHAR(3) currency
+        STRING description
+        TIMESTAMP created_at
+        BOOLEAN is_active
+    }
+
+    TRADES {
+        BIGINT id PK
+        BIGINT portfolio_id FK
+        STRING symbol
+        NUMERIC entry_price
+        NUMERIC exit_price
+        INT quantity
+        DATE entry_date
+        DATE exit_date
+        NUMERIC margin_amount
+        NUMERIC leverage
+        NUMERIC borrowed_amount
+        NUMERIC collateral_amount
+        NUMERIC maintenance_margin
+        STRING financing_rate_type
+        STRING financing_currency
+        TEXT daily_interest
+        TEXT notes
+    }
+
+    TRADE_CLOSURES {
+        BIGINT id PK
+        BIGINT trade_id FK
+        INT closed_quantity
+        NUMERIC exit_price
+        DATE exit_date
+        TEXT notes
+    }
+
+    FINANCING_EVENTS {
+        BIGINT id PK
+        BIGINT trade_id FK
+        DATE event_date
+        STRING event_type
+        NUMERIC rate
+        NUMERIC amount_change
+        TEXT notes
+    }
+
+    SPOT_TRANSACTIONS {
+        BIGINT id PK
+        BIGINT portfolio_id FK
+        STRING company
+        STRING ticker
+        STRING transaction_type
+        NUMERIC price
+        NUMERIC quantity
+        NUMERIC amount
+        DATE trade_date
+        TEXT note
+    }
+
+    USERS ||--o{ PORTFOLIOS : "1:N"
+    PORTFOLIOS ||--o{ TRADES : "1:N"
+    PORTFOLIOS ||--o{ SPOT_TRANSACTIONS : "1:N"
+    TRADES ||--o{ TRADE_CLOSURES : "1:N"
+    TRADES ||--o{ FINANCING_EVENTS : "1:N"

@@ -1,0 +1,90 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="600" viewBox="0 0 1000 600">
+  <style>
+    rect { fill: #f9f9f9; stroke: #333; stroke-width: 1.5; }
+    text { font-family: Arial, sans-serif; font-size: 12px; }
+    .title { font-weight: bold; font-size: 14px; }
+    .line { stroke: #555; stroke-width: 1.2; marker-end: url(#arrow); }
+  </style>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="10" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L10,3 L0,6 z" fill="#555" />
+    </marker>
+  </defs>
+
+  <!-- Users -->
+  <rect x="50" y="50" width="160" height="120" rx="6" ry="6"/>
+  <text x="65" y="70" class="title">USERS</text>
+  <text x="65" y="90">id (PK)</text>
+  <text x="65" y="105">username (UQ)</text>
+  <text x="65" y="120">email (UQ)</text>
+  <text x="65" y="135">password</text>
+  <text x="65" y="150">first_name, last_name</text>
+  <text x="65" y="165">created_at, enabled</text>
+
+  <!-- Portfolios -->
+  <rect x="300" y="40" width="200" height="140" rx="6" ry="6"/>
+  <text x="315" y="60" class="title">PORTFOLIOS</text>
+  <text x="315" y="80">id (PK)</text>
+  <text x="315" y="95">user_id (FK → users)</text>
+  <text x="315" y="110">name (UQ per user)</text>
+  <text x="315" y="125">type (MARGIN/SPOT)</text>
+  <text x="315" y="140">currency, is_active</text>
+  <text x="315" y="155">description, created_at</text>
+
+  <!-- Trades -->
+  <rect x="600" y="20" width="220" height="180" rx="6" ry="6"/>
+  <text x="615" y="40" class="title">TRADES</text>
+  <text x="615" y="60">id (PK)</text>
+  <text x="615" y="75">portfolio_id (FK)</text>
+  <text x="615" y="90">symbol, entry_price, exit_price</text>
+  <text x="615" y="105">quantity, entry_date, exit_date</text>
+  <text x="615" y="120">margin_amount, leverage</text>
+  <text x="615" y="135">borrowed_amount, collateral_amount</text>
+  <text x="615" y="150">maintenance_margin</text>
+  <text x="615" y="165">financing_rate_type, currency</text>
+  <text x="615" y="180">notes, daily_interest</text>
+
+  <!-- Trade Closures -->
+  <rect x="620" y="230" width="180" height="110" rx="6" ry="6"/>
+  <text x="635" y="250" class="title">TRADE_CLOSURES</text>
+  <text x="635" y="270">id (PK)</text>
+  <text x="635" y="285">trade_id (FK → trades)</text>
+  <text x="635" y="300">closed_quantity</text>
+  <text x="635" y="315">exit_price, exit_date</text>
+  <text x="635" y="330">notes</text>
+
+  <!-- Financing Events -->
+  <rect x="820" y="230" width="170" height="110" rx="6" ry="6"/>
+  <text x="835" y="250" class="title">FINANCING_EVENTS</text>
+  <text x="835" y="270">id (PK)</text>
+  <text x="835" y="285">trade_id (FK → trades)</text>
+  <text x="835" y="300">event_date, event_type</text>
+  <text x="835" y="315">rate, amount_change</text>
+  <text x="835" y="330">notes</text>
+
+  <!-- Spot Transactions -->
+  <rect x="320" y="230" width="220" height="140" rx="6" ry="6"/>
+  <text x="335" y="250" class="title">SPOT_TRANSACTIONS</text>
+  <text x="335" y="270">id (PK)</text>
+  <text x="335" y="285">portfolio_id (FK → portfolios)</text>
+  <text x="335" y="300">company, ticker</text>
+  <text x="335" y="315">transaction_type</text>
+  <text x="335" y="330">price, quantity, amount</text>
+  <text x="335" y="345">trade_date, note</text>
+
+  <!-- Relationships -->
+  <line class="line" x1="210" y1="110" x2="300" y2="110"/>
+  <text x="235" y="100">1:N</text>
+
+  <line class="line" x1="500" y1="110" x2="600" y2="110"/>
+  <text x="525" y="100">1:N</text>
+
+  <line class="line" x1="500" y1="300" x2="320" y2="300"/>
+  <text x="410" y="290">1:N</text>
+
+  <line class="line" x1="710" y1="200" x2="710" y2="230"/>
+  <text x="680" y="215">1:N</text>
+
+  <line class="line" x1="820" y1="200" x2="905" y2="230"/>
+  <text x="850" y="215">1:N</text>
+</svg>
